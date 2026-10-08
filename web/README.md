@@ -27,5 +27,6 @@ Container name: **`NginxProxyManager-ToolBox`**
 | `CRON_SECRET` | Internal cron tick auth |
 | `INGEST_SECRET` | Remote snapshot ingest auth |
 | `PORT` / host publish mapping | Web UI port (your choice on the host) |
+| `CUSTOM_DNS` | Comma-separated DNS servers (e.g. LAN resolver) so NPM hostnames resolve inside the container |
 
 *Revised: 2026-10-08*

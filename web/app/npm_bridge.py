@@ -21,9 +21,39 @@ class TestResult:
     message: str
 
 
+def _is_dns_failure(exc: BaseException) -> bool:
+    text = str(exc).lower()
+    if "failed to resolve" in text or "no address associated with hostname" in text:
+        return True
+    if "nameresolutionerror" in text or "getaddrinfo failed" in text:
+        return True
+    cause = getattr(exc, "__cause__", None)
+    if cause is not None and cause is not exc:
+        return _is_dns_failure(cause)
+    return False
+
+
 def _connection_error_message(api_url: str, exc: Exception, *, verify_tls: bool) -> str:
     parsed = urlparse(NpmClient.normalize_api_url(api_url))
-    lines = [str(exc).strip()]
+    host = parsed.hostname or ""
+    lines: list[str] = []
+
+    if _is_dns_failure(exc):
+        lines.append(f"The ToolBox container could not resolve the hostname “{host}”.")
+        lines.append(
+            "Your PC may know that name (DNS, Pi-hole, or hosts file) but the container often does not."
+        )
+        lines.append(
+            "Use the same IP address you use for NPM on the LAN (for example 192.168.x.x) in the host field, "
+            "or set CUSTOM_DNS on the container to your LAN DNS resolver."
+        )
+        lines.append(
+            "If this name is your public proxy site (not the admin UI), use the admin host/IP instead — "
+            "the API path /api/tokens must be reachable on the host and port you select."
+        )
+        return " ".join(lines)
+
+    lines.append(str(exc).strip())
     if isinstance(exc, requests.exceptions.SSLError) or "SSL" in str(exc):
         lines.append(
             "SSL/TLS failed for the host and port you selected. "
