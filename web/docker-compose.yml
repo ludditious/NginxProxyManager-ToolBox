@@ -10,6 +10,8 @@ services:
     environment:
       ALLOW_REGISTRATION: "true"
       DATABASE_URL: sqlite:////data/npmtoolbox.db
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     volumes:
       - npm-toolbox-data:/data
       # Optional: mount Docker socket for Discover + select

@@ -12,7 +12,7 @@
   <input type="hidden" name="slave_id" value="{{ s.id }}">
   <h2>{{ s.name or ('Slave ' ~ s.id) }}</h2>
   <label>Name<input type="text" name="name" value="{{ s.name }}"></label>
-  {% with npm_host=row.npm_host, port_preset=row.port_preset, npm_port_custom=row.npm_port_custom %}
+  {% with npm_host=row.npm_host, connect_host=row.connect_host, port_preset=row.port_preset, npm_port_custom=row.npm_port_custom %}
   {% include "_npm_host_port.html" %}
   {% endwith %}
   <label>Identity<input type="email" name="identity" value="{{ s.identity }}"></label>
@@ -29,7 +29,7 @@
 <form method="post" action="/slaves/save" class="card">
   <h2>Add slave</h2>
   <label>Name<input type="text" name="name" required></label>
-  {% with npm_host='', port_preset='80', npm_port_custom='' %}
+  {% with npm_host='', connect_host='', port_preset='80', npm_port_custom='' %}
   {% include "_npm_host_port.html" %}
   {% endwith %}
   <label>Identity<input type="email" name="identity"></label>

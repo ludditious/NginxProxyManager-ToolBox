@@ -31,3 +31,14 @@
   >
 </label>
 <p class="muted small">Port <code>80</code> → <code>http://</code>. Port <code>443</code> → <code>https://</code>. Other custom ports → <code>http://</code>.</p>
+
+<label>Connect via (optional)
+  <input
+    type="text"
+    name="connect_host"
+    value="{{ connect_host }}"
+    autocomplete="off"
+    placeholder="host.docker.internal"
+  >
+</label>
+<p class="muted small">Leave blank to connect to the host above. If LAN IP or hostname fails from Docker, use <code>host.docker.internal</code>, your NPM <strong>container name</strong> on a shared network, or the host gateway IP. ToolBox calls this address; “NPM host” can stay your LAN IP for your notes.</p>

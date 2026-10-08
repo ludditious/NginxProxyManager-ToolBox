@@ -53,6 +53,26 @@ def _connection_error_message(api_url: str, exc: Exception, *, verify_tls: bool)
         )
         return " ".join(lines)
 
+    text = str(exc).lower()
+    if "connection refused" in text or "econnrefused" in text:
+        lines.append(
+            f"Nothing on {parsed.scheme}://{host}:{parsed.port or ''} accepted a connection from inside this ToolBox container."
+        )
+        lines.append(
+            "If NPM and ToolBox run on the same Docker host, a LAN IP often fails from inside a container. "
+            "Set “Connect via” to host.docker.internal (see compose extra_hosts), the host gateway (often 172.17.0.1 on Linux), "
+            "or the NPM container name on a shared Docker network."
+        )
+        lines.append(
+            "Confirm the port is where NPM admin/API listens, not only public proxied sites on 80/443."
+        )
+        return " ".join(lines)
+    if "timed out" in text or "timeout" in text:
+        lines.append(
+            "Connection timed out from the container to that address. Check firewall, routing, and that NPM is reachable from other containers on this host."
+        )
+        return " ".join(lines)
+
     lines.append(str(exc).strip())
     if isinstance(exc, requests.exceptions.SSLError) or "SSL" in str(exc):
         lines.append(

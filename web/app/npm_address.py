@@ -47,8 +47,21 @@ def scheme_for_port(port: int) -> str:
     return "https" if port == 443 else "http"
 
 
-def build_api_url_from_form(host: str, port_preset: str, custom_port: str) -> str:
-    h = validate_host(host)
+def connection_target(admin_host: str, connect_host: str) -> str:
+    reach = (connect_host or "").strip()
+    if reach:
+        return validate_host(reach)
+    return validate_host(admin_host)
+
+
+def build_api_url_from_form(
+    host: str,
+    port_preset: str,
+    custom_port: str,
+    *,
+    connect_host: str = "",
+) -> str:
+    h = connection_target(host, connect_host)
     p = resolve_port(port_preset, custom_port)
     return f"{scheme_for_port(p)}://{h}:{p}"
 

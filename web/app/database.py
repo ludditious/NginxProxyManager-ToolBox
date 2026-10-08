@@ -3,7 +3,7 @@
 
 from __future__ import annotations
 
-from sqlalchemy import create_engine
+from sqlalchemy import create_engine, text
 from sqlalchemy.orm import DeclarativeBase, sessionmaker
 
 from .config import get_settings
@@ -34,7 +34,33 @@ def get_db():
         db.close()
 
 
+def _sqlite_add_column(conn, table: str, column: str, ddl: str) -> None:
+    rows = conn.execute(text(f"PRAGMA table_info({table})")).fetchall()
+    existing = {str(r[1]) for r in rows}
+    if column not in existing:
+        conn.execute(text(f"ALTER TABLE {table} ADD COLUMN {column} {ddl}"))
+
+
+def migrate_schema() -> None:
+    url = str(engine.url)
+    if not url.startswith("sqlite"):
+        return
+    patches = (
+        ("master_instances", "admin_host", "VARCHAR(512) NOT NULL DEFAULT ''"),
+        ("master_instances", "connect_host", "VARCHAR(512) NOT NULL DEFAULT ''"),
+        ("slave_instances", "admin_host", "VARCHAR(512) NOT NULL DEFAULT ''"),
+        ("slave_instances", "connect_host", "VARCHAR(512) NOT NULL DEFAULT ''"),
+    )
+    with engine.begin() as conn:
+        for table, column, ddl in patches:
+            try:
+                _sqlite_add_column(conn, table, column, ddl)
+            except Exception:
+                continue
+
+
 def init_db() -> None:
     from . import models  # noqa: F401
 
     Base.metadata.create_all(bind=engine)
+    migrate_schema()

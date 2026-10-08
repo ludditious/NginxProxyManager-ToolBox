@@ -128,6 +128,9 @@ def master_page(
     candidates, discover_err = discover_npm_containers()
     auto = single_high_confidence(candidates)
     npm_host, port_preset, npm_port_custom = parse_api_url(master.api_url if master else "")
+    if master and master.admin_host:
+        npm_host = master.admin_host
+    connect_host = (master.connect_host if master else "") or ""
     return templates.TemplateResponse(
         request,
         "master.html",
@@ -136,6 +139,7 @@ def master_page(
             user,
             master=master,
             npm_host=npm_host,
+            connect_host=connect_host,
             port_preset=port_preset,
             npm_port_custom=npm_port_custom,
             candidates=candidates,
@@ -152,6 +156,7 @@ def master_save(
     user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
     npm_host: str = Form(""),
+    connect_host: str = Form(""),
     port_preset: str = Form("80"),
     npm_port_custom: str = Form(""),
     identity: str = Form(""),
@@ -175,7 +180,11 @@ def master_save(
                 apply_candidate_to_master(master, c)
                 break
     try:
-        master.api_url = build_api_url_from_form(npm_host, port_preset, npm_port_custom)
+        master.admin_host = npm_host.strip()
+        master.connect_host = connect_host.strip()
+        master.api_url = build_api_url_from_form(
+            npm_host, port_preset, npm_port_custom, connect_host=connect_host
+        )
     except ValueError as e:
         return RedirectResponse(f"/master?err={quote(str(e))}", status_code=303)
     master.identity = identity.strip()
@@ -196,6 +205,7 @@ def master_test(
     user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
     npm_host: str = Form(""),
+    connect_host: str = Form(""),
     port_preset: str = Form("80"),
     npm_port_custom: str = Form(""),
     identity: str = Form(""),
@@ -206,7 +216,9 @@ def master_test(
     master = user.master
     assert master is not None
     try:
-        api_url = build_api_url_from_form(npm_host, port_preset, npm_port_custom)
+        api_url = build_api_url_from_form(
+            npm_host, port_preset, npm_port_custom, connect_host=connect_host
+        )
     except ValueError as e:
         return RedirectResponse(f"/master?err={quote(str(e))}", status_code=303)
     res = test_npm_connection(
@@ -227,7 +239,16 @@ def slaves_page(request: Request, user: User = Depends(get_current_user), db: Se
     slave_rows = []
     for s in slaves:
         h, pr, cu = parse_api_url(s.api_url)
-        slave_rows.append({"slave": s, "npm_host": h, "port_preset": pr, "npm_port_custom": cu})
+        ah = s.admin_host or h
+        slave_rows.append(
+            {
+                "slave": s,
+                "npm_host": ah,
+                "connect_host": s.connect_host or "",
+                "port_preset": pr,
+                "npm_port_custom": cu,
+            }
+        )
     return templates.TemplateResponse(
         request, "slaves.html", _ctx(request, user, slave_rows=slave_rows)
     )
@@ -240,6 +261,7 @@ def slave_save(
     slave_id: str = Form(""),
     name: str = Form(""),
     npm_host: str = Form(""),
+    connect_host: str = Form(""),
     port_preset: str = Form("80"),
     npm_port_custom: str = Form(""),
     identity: str = Form(""),
@@ -263,7 +285,11 @@ def slave_save(
         db.add(slave)
     slave.name = name.strip()
     try:
-        slave.api_url = build_api_url_from_form(npm_host, port_preset, npm_port_custom)
+        slave.admin_host = npm_host.strip()
+        slave.connect_host = connect_host.strip()
+        slave.api_url = build_api_url_from_form(
+            npm_host, port_preset, npm_port_custom, connect_host=connect_host
+        )
     except ValueError as e:
         return RedirectResponse(f"/slaves?err={quote(str(e))}", status_code=303)
     slave.identity = identity.strip()
