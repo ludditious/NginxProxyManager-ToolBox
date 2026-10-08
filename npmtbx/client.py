@@ -33,20 +33,21 @@ class NpmClient:
         *,
         identity: str,
         secret: str,
-        verify_tls: bool = True,
+        verify_tls: bool = False,
         timeout: int = 120,
     ) -> None:
-        raw = (base_url or "").strip().rstrip("/")
-        if not raw.startswith("http"):
-            raw = "http://" + raw
-        self.base_url = raw
+        self.base_url = self.normalize_api_url(base_url)
         self.identity = identity.strip()
         self.secret = secret
-        self.verify_tls = verify_tls
+        self.verify_tls = bool(verify_tls)
         self.timeout = timeout
         self._token: str | None = None
         self._session = requests.Session()
         self._session.headers.update({"User-Agent": "NginxProxyManager-ToolBox/1.0"})
+
+    def _request_verify(self) -> bool:
+        """Only validate certificates when the user explicitly enabled Verify TLS."""
+        return self.verify_tls
 
     def login(self) -> None:
         url = urljoin(self.base_url + "/", "api/tokens")
@@ -54,7 +55,7 @@ class NpmClient:
             url,
             json={"identity": self.identity, "secret": self.secret},
             timeout=self.timeout,
-            verify=self.verify_tls,
+            verify=self._request_verify(),
         )
         if resp.status_code >= 400:
             raise NpmError(f"Authentication failed ({resp.status_code}): {resp.text[:500]}")
@@ -69,11 +70,11 @@ class NpmClient:
         if not self._token:
             self.login()
         url = urljoin(self.base_url + "/", path.lstrip("/"))
-        resp = self._session.get(url, timeout=self.timeout, verify=self.verify_tls)
+        resp = self._session.get(url, timeout=self.timeout, verify=self._request_verify())
         if resp.status_code == 401:
             self._token = None
             self.login()
-            resp = self._session.get(url, timeout=self.timeout, verify=self.verify_tls)
+            resp = self._session.get(url, timeout=self.timeout, verify=self._request_verify())
         if resp.status_code >= 400:
             raise NpmError(f"GET {path} failed ({resp.status_code}): {resp.text[:500]}")
         return resp.json()
@@ -86,7 +87,7 @@ class NpmClient:
                 url,
                 json={"identity": "__probe__", "secret": "__probe__"},
                 timeout=min(15, self.timeout),
-                verify=self.verify_tls,
+                verify=self._request_verify(),
             )
         except requests.RequestException:
             return False
@@ -106,12 +107,23 @@ class NpmClient:
 
     @staticmethod
     def normalize_api_url(url: str) -> str:
+        """Preserve http vs https; default to http when no scheme (never assume TLS)."""
         raw = (url or "").strip()
         if not raw:
             return ""
-        if not raw.startswith("http"):
+        if not raw.startswith(("http://", "https://")):
             raw = "http://" + raw
         parsed = urlparse(raw)
         if not parsed.scheme or not parsed.netloc:
             return raw.rstrip("/")
         return f"{parsed.scheme}://{parsed.netloc}".rstrip("/")
+
+    @staticmethod
+    def admin_url_hint(api_url: str) -> str:
+        parsed = urlparse(NpmClient.normalize_api_url(api_url))
+        host = parsed.hostname or ""
+        if not host:
+            return "http://YOUR-NPM-HOST:81"
+        if parsed.port == 81 and parsed.scheme == "http":
+            return ""
+        return f"http://{host}:81"

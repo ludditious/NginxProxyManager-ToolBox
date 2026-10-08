@@ -4,7 +4,9 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from urllib.parse import urlparse
 
+import requests
 from npmtbx.client import NpmClient, NpmError
 
 from .config import get_settings
@@ -17,6 +19,26 @@ class TestResult:
     ok: bool
     title: str
     message: str
+
+
+def _connection_error_message(api_url: str, exc: Exception, *, verify_tls: bool) -> str:
+    hint = NpmClient.admin_url_hint(api_url)
+    parsed = urlparse(NpmClient.normalize_api_url(api_url))
+    lines = [str(exc).strip()]
+    if isinstance(exc, requests.exceptions.SSLError) or "SSL" in str(exc):
+        lines.append(
+            "SSL/TLS failed. The NPM *admin API* is usually plain HTTP on port 81, "
+            "not the public HTTPS address on port 443."
+        )
+        if hint:
+            lines.append(f"Try: {hint}")
+        if verify_tls:
+            lines.append("Turn off “Verify TLS certificate” unless NPM admin is HTTPS with a valid cert.")
+        elif parsed.scheme == "https":
+            lines.append(
+                "If you meant the admin UI, switch the address to http://…:81 instead of https://…:443."
+            )
+    return " ".join(lines)
 
 
 def resolve_secret(password_enc: str, form_secret: str | None) -> tuple[str | None, str | None]:
@@ -77,8 +99,18 @@ def test_npm_connection(
         client.export_configuration()
     except NpmError as e:
         return TestResult(False, "Connection test", str(e))
+    except (requests.exceptions.SSLError, requests.exceptions.ConnectionError) as e:
+        return TestResult(
+            False,
+            "Connection test",
+            _connection_error_message(url, e, verify_tls=verify_tls),
+        )
     except Exception as e:
-        return TestResult(False, "Connection test", str(e))
+        return TestResult(
+            False,
+            "Connection test",
+            _connection_error_message(url, e, verify_tls=verify_tls),
+        )
     return TestResult(True, "Connection test", f"Authenticated to {url}")
 
 

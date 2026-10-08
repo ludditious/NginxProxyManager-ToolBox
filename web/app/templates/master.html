@@ -46,7 +46,7 @@
   <label>NPM admin web address
     <input type="url" name="api_url" value="{{ master.api_url if master else '' }}" placeholder="http://127.0.0.1:81" required>
   </label>
-  <p class="muted small">The URL you open in a browser to manage NPM (scheme + host + port). Use <code>http://</code> unless you know NPM admin is HTTPS-only.</p>
+  <p class="muted small">Use the <strong>admin</strong> address (port <code>81</code>, usually <code>http://</code>), not your public HTTPS site on port <code>443</code>. Example: <code>http://192.168.200.124:81</code>. We do not assume SSL; only enable Verify TLS below if admin is really HTTPS with a matching certificate.</p>
   <label>NPM login email
     <input type="email" name="identity" value="{{ master.identity if master else '' }}" required>
   </label>
@@ -74,7 +74,7 @@
   <label>Link group
     <input type="text" name="link_group" value="{{ master.link_group if master else 'default' }}">
   </label>
-  <label class="check"><input type="checkbox" name="verify_tls" {% if master and master.verify_tls %}checked{% endif %}> Verify TLS when calling NPM API</label>
+  <label class="check"><input type="checkbox" name="verify_tls" {% if master and master.verify_tls %}checked{% endif %}> Verify TLS certificate (off by default; enable only for HTTPS admin with a valid cert)</label>
   <label class="check"><input type="checkbox" name="enabled" checked> Enabled</label>
   <button type="submit">Save master</button>
   <button type="submit" formaction="/master/test" formmethod="post">Test connection</button>
