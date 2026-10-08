@@ -1,0 +1,25 @@
+{% extends "base.html" %}
+{% block title %} - Schedule{% endblock %}
+{% block content %}
+<h1>Schedule</h1>
+<p class="muted">Built-in scheduler checks every minute (UTC). When your interval has passed on a selected day, a backup runs.</p>
+<form method="post" action="/schedule/save" class="card">
+  <label class="check"><input type="checkbox" name="enabled" {% if schedule.enabled %}checked{% endif %}> Enable scheduled backups</label>
+  <label>Interval
+    <select name="interval_minutes">
+      {% for minutes, label in interval_choices %}
+      <option value="{{ minutes }}" {% if schedule.interval_minutes == minutes %}selected{% endif %}>{{ label }}</option>
+      {% endfor %}
+    </select>
+  </label>
+  <fieldset>
+    <legend>Days (UTC)</legend>
+    <div class="day-grid">
+    {% for d in day_keys %}
+      <label class="check"><input type="checkbox" name="days" value="{{ d }}" {% if d in schedule.get_days() %}checked{% endif %}> {{ d|upper }}</label>
+    {% endfor %}
+    </div>
+  </fieldset>
+  <button type="submit">Save schedule</button>
+</form>
+{% endblock %}

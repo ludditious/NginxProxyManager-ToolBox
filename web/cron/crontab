@@ -1,0 +1,2 @@
+# Every minute: check schedules and run due syncs (see app/cron_logic.py).
+* * * * * root /app/web/cron/cron-tick.sh >> /var/log/agh-sync-cron.log 2>&1

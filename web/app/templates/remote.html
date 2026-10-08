@@ -1,0 +1,61 @@
+{% extends "base.html" %}
+{% block title %} - Remote DR{% endblock %}
+{% block content %}
+<h1>Remote ToolBox (DR)</h1>
+{% if request.query_params.get('msg') %}<p class="notice notice-ok">{{ request.query_params.get('msg') }}</p>{% endif %}
+{% if request.query_params.get('err') %}<p class="notice notice-err">{{ request.query_params.get('err') }}</p>{% endif %}
+
+<section class="card">
+  <h2 class="footer-heading">Ingest token (this ToolBox)</h2>
+  <p class="muted small">Other ToolBox instances use this token as <code>Authorization: Bearer …</code> when pushing snapshots here.</p>
+  <code class="cmd-box">{{ ingest_secret }}</code>
+  <p class="muted small">Set <code>INGEST_SECRET</code> in the container environment to rotate. Keep it private.</p>
+</section>
+
+<section class="card">
+  <h2 class="footer-heading">Push destinations</h2>
+  {% for d in destinations %}
+  <form method="post" action="/remote/destination/save" class="card nested">
+    <input type="hidden" name="dest_id" value="{{ d.id }}">
+    <label>Name<input type="text" name="name" value="{{ d.name }}"></label>
+    <label>ToolBox base URL<input type="url" name="base_url" value="{{ d.base_url }}"></label>
+    <label>Remote ingest token<input type="password" name="ingest_token" placeholder="Leave blank to keep"></label>
+    <label class="check"><input type="checkbox" name="enabled" {% if d.enabled %}checked{% endif %}> Enabled</label>
+    <label class="check"><input type="checkbox" name="push_after_backup" {% if d.push_after_backup %}checked{% endif %}> Push after each backup</label>
+    <button type="submit">Save</button>
+  </form>
+  {% endfor %}
+  <form method="post" action="/remote/destination/save" class="card nested">
+    <h3>Add destination</h3>
+    <label>Name<input type="text" name="name" required></label>
+    <label>ToolBox base URL<input type="url" name="base_url" required></label>
+    <label>Remote ingest token<input type="password" name="ingest_token" required></label>
+    <button type="submit">Add</button>
+  </form>
+</section>
+
+<section class="card">
+  <h2 class="footer-heading">Pull sources</h2>
+  {% for s in sources %}
+  <form method="post" action="/remote/source/save" class="card nested">
+    <input type="hidden" name="source_id" value="{{ s.id }}">
+    <label>Name<input type="text" name="name" value="{{ s.name }}"></label>
+    <label>ToolBox base URL<input type="url" name="base_url" value="{{ s.base_url }}"></label>
+    <label>Their ingest token<input type="password" name="ingest_token" placeholder="Leave blank to keep"></label>
+    <label class="check"><input type="checkbox" name="enabled" {% if s.enabled %}checked{% endif %}> Enabled</label>
+    <button type="submit">Save</button>
+  </form>
+  <form method="post" action="/remote/pull" class="inline-form">
+    <input type="hidden" name="source_id" value="{{ s.id }}">
+    <button type="submit">Pull latest from {{ s.name or s.id }}</button>
+  </form>
+  {% endfor %}
+  <form method="post" action="/remote/source/save" class="card nested">
+    <h3>Add pull source</h3>
+    <label>Name<input type="text" name="name" required></label>
+    <label>ToolBox base URL<input type="url" name="base_url" required></label>
+    <label>Their ingest token<input type="password" name="ingest_token" required></label>
+    <button type="submit">Add</button>
+  </form>
+</section>
+{% endblock %}

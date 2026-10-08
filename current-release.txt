@@ -1,0 +1,1 @@
+Initial Nginx Proxy Manager ToolBox web app: NPM snapshots, Docker discover, remote DR push/pull, SMTP notifications, update check.

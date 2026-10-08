@@ -1,0 +1,45 @@
+{% if backups %}
+<table class="footer-table">
+  <thead><tr><th>Name</th><th>API URL</th><th>Created (UTC)</th><th>Size</th><th></th></tr></thead>
+  <tbody>
+  {% for b in backups %}
+    <tr>
+      <td>{{ b.name }}</td>
+      <td class="muted small">{{ b.api_url }}</td>
+      <td>{{ b.created_at }}</td>
+      <td>{{ b.size_bytes }}</td>
+      <td class="backup-actions">
+        <a href="/backups/download/{{ b.id }}">Download</a>
+        <form method="post" action="/backups/restore-master" class="inline-form" onsubmit="return confirm('Restore volume data to master paths?');">
+          <input type="hidden" name="backup_id" value="{{ b.id }}">
+          <button type="submit" class="linkish">Restore master volumes</button>
+        </form>
+        <form method="post" action="/backups/delete" class="inline-form" onsubmit="return confirm('Delete this backup?');">
+          <input type="hidden" name="backup_id" value="{{ b.id }}">
+          <button type="submit" class="linkish danger-text">Delete</button>
+        </form>
+      </td>
+    </tr>
+  {% endfor %}
+  </tbody>
+</table>
+{% if pages > 1 %}
+<nav class="pager" aria-label="Backup list pages">
+  {% if page > 1 %}
+  <a class="pager-btn" href="/backups?{{ page_param }}={{ page - 1 }}{% if other_page_param and other_page %}&{{ other_page_param }}={{ other_page }}{% endif %}">Previous</a>
+  {% else %}
+  <span class="pager-btn pager-disabled">Previous</span>
+  {% endif %}
+  <span class="pager-info">Page {{ page }} of {{ pages }} ({{ total }} total)</span>
+  {% if page < pages %}
+  <a class="pager-btn" href="/backups?{{ page_param }}={{ page + 1 }}{% if other_page_param and other_page %}&{{ other_page_param }}={{ other_page }}{% endif %}">Next</a>
+  {% else %}
+  <span class="pager-btn pager-disabled">Next</span>
+  {% endif %}
+</nav>
+{% elif total > 0 %}
+<p class="muted small pager-info">{{ total }} backup(s)</p>
+{% endif %}
+{% else %}
+<p class="muted">No backups yet.</p>
+{% endif %}

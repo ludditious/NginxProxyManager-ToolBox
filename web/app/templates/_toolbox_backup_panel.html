@@ -1,0 +1,31 @@
+<section class="footer-backups card backup-section">
+  <h2>Nginx Proxy Manager ToolBox</h2>
+  <p class="muted small">Backs up master/slave instance settings, remote DR targets, schedule, and notification preferences (not your ToolBox login or NPM passwords).</p>
+  <form method="post" action="/backups/toolbox/create" class="footer-actions">
+    <button type="submit">Create ToolBox backup now</button>
+  </form>
+  {% if toolbox_backups %}
+  <table class="footer-table">
+    <thead><tr><th>Name</th><th>Created (UTC)</th><th></th></tr></thead>
+    <tbody>
+    {% for b in toolbox_backups %}
+      <tr>
+        <td>{{ b.name }}</td>
+        <td>{{ b.created_at }}</td>
+        <td class="backup-actions">
+          <a href="/backups/toolbox/{{ b.id }}/download">Download</a>
+          <form method="post" action="/backups/toolbox/{{ b.id }}/restore" class="inline-form" onsubmit="return confirm('Replace ToolBox settings?');">
+            <button type="submit" class="linkish">Restore</button>
+          </form>
+          <form method="post" action="/backups/toolbox/{{ b.id }}/delete" class="inline-form" onsubmit="return confirm('Delete?');">
+            <button type="submit" class="linkish danger-text">Delete</button>
+          </form>
+        </td>
+      </tr>
+    {% endfor %}
+    </tbody>
+  </table>
+  {% else %}
+  <p class="muted">No ToolBox backups yet.</p>
+  {% endif %}
+</section>

@@ -1,0 +1,15 @@
+<section class="footer-backups card backup-section">
+  <h2>Nginx Proxy Manager</h2>
+  <p class="muted small">Snapshots include NPM API JSON (proxy hosts, streams, certificates, settings, users, and related data) plus optional <code>/data</code> and <code>/etc/letsencrypt</code> volume archives.</p>
+  <h3 class="footer-heading">Manual backups</h3>
+  <form method="post" action="/backups/create" class="footer-actions">
+    <button type="submit">Create manual backup</button>
+  </form>
+  {% with backups=manual_backups, page=manual_page, pages=manual_pages, total=manual_total, page_param='manual_page', other_page_param='auto_page', other_page=auto_page %}
+  {% include "_backup_table.html" %}
+  {% endwith %}
+  <h3 class="footer-heading">Automated backups</h3>
+  {% with backups=auto_backups, page=auto_page, pages=auto_pages, total=auto_total, page_param='auto_page', other_page_param='manual_page', other_page=manual_page %}
+  {% include "_backup_table.html" %}
+  {% endwith %}
+</section>

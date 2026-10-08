@@ -1,0 +1,21 @@
+{% extends "base.html" %}
+{% block title %} - Update{% endblock %}
+{% block content %}
+<h1>Update</h1>
+<p>Installed: <strong><code>{{ installed_version }}</code></strong></p>
+{% if remote_version %}
+<p>Latest published: <strong><code>{{ remote_version }}</code></strong></p>
+{% endif %}
+{% if update_check_error %}
+<p class="notice notice-err">{{ update_check_error }}</p>
+{% endif %}
+{% if pull_command %}
+<label>Pull command
+  <textarea readonly id="pull-cmd" class="cmd-box" rows="2">{{ pull_command }}</textarea>
+</label>
+<button type="button" class="copy-cmd" data-target="pull-cmd">Copy</button>
+{% endif %}
+{% if release_notes %}
+<pre class="log-body">{{ release_notes }}</pre>
+{% endif %}
+{% endblock %}

@@ -1,0 +1,14 @@
+.git
+.gitignore
+**/.venv
+**/venv
+**/__pycache__
+**/*.pyc
+**/dist
+**/build
+**/*.db
+**/.env
+**/activity.log
+desktop-notes
+*.md
+!web/README.md

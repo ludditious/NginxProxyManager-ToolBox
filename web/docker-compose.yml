@@ -1,0 +1,22 @@
+services:
+  web:
+    build:
+      context: ..
+      dockerfile: Dockerfile
+    image: nginxproxymanager-toolbox:latest
+    container_name: NginxProxyManager-ToolBox
+    ports:
+      - "8080:8080"
+    environment:
+      ALLOW_REGISTRATION: "true"
+      DATABASE_URL: sqlite:////data/npmtoolbox.db
+    volumes:
+      - npm-toolbox-data:/data
+      # Optional: mount Docker socket for Discover + select
+      # - /var/run/docker.sock:/var/run/docker.sock:ro
+      # Optional: read-only NPM host paths for volume backup (example)
+      # - /path/on/host/npm/data:/npm-data:ro
+    restart: unless-stopped
+
+volumes:
+  npm-toolbox-data:

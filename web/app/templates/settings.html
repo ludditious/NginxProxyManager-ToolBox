@@ -1,0 +1,70 @@
+{% extends "base.html" %}
+{% block title %} - Settings{% endblock %}
+{% block content %}
+<h1>Settings</h1>
+{% if message %}<p class="{{ message_class or 'notice' }}">{{ message }}</p>{% endif %}
+
+<form method="post" action="/settings/account/password" class="card">
+  <p class="muted">Signed in as <strong>{{ current_username }}</strong></p>
+  <label>Current password<input type="password" name="current_password" required autocomplete="current-password"></label>
+  <label>New password (8+)<input type="password" name="new_password" required minlength="8"></label>
+  <label>Confirm<input type="password" name="confirm_password" required minlength="8"></label>
+  <button type="submit">Update password</button>
+</form>
+
+<form method="post" action="/settings/account/recovery" class="card">
+  <h2 class="footer-heading">Password recovery</h2>
+  {% for i in range(3) %}
+  <p class="recovery-q">{{ security_questions[i] }}</p>
+  <label><input type="text" name="answer_{{ i + 1 }}" value="{{ recovery_answers[i] }}" required autocomplete="off"></label>
+  {% endfor %}
+  <button type="submit">Save recovery answers</button>
+</form>
+
+<section class="card">
+  <h2 class="footer-heading">Automated NPM backup</h2>
+  <form method="post" action="/settings/automated-backup">
+    <label class="check"><input type="checkbox" name="auto_backup_enabled" {% if auto_backup_enabled %}checked{% endif %}> Enable daily automated backup</label>
+    <label class="check"><input type="checkbox" name="include_api" {% if include_api %}checked{% endif %}> Include API JSON layer</label>
+    <label class="check"><input type="checkbox" name="include_volumes" {% if include_volumes %}checked{% endif %}> Include volume archives</label>
+    <label>Retention
+      <select name="auto_backup_retention">
+        {% for form_val, days, label in backup_retention_options %}
+        <option value="{{ form_val }}" {% if auto_backup_retention_days == days %}selected{% endif %}>{{ label }}</option>
+        {% endfor %}
+      </select>
+    </label>
+    <button type="submit">Save backup settings</button>
+  </form>
+</section>
+
+<section class="card">
+  <h2 class="footer-heading">Email notifications</h2>
+  <form method="post" action="/settings/smtp">
+    <label class="check"><input type="checkbox" name="smtp_enabled" {% if smtp and smtp.enabled %}checked{% endif %}> Enable SMTP relay</label>
+    <label>Host<input type="text" name="smtp_host" value="{{ smtp.host if smtp else '' }}"></label>
+    <label>Port<input type="number" name="smtp_port" value="{{ smtp.port if smtp else 587 }}"></label>
+    <label class="check"><input type="checkbox" name="smtp_use_tls" {% if not smtp or smtp.use_tls %}checked{% endif %}> STARTTLS</label>
+    <label>Username<input type="text" name="smtp_username" autocomplete="off"></label>
+    <label>Password<input type="password" name="smtp_password" autocomplete="new-password"></label>
+    <label>From<input type="email" name="smtp_from" value="{{ smtp.from_address if smtp else '' }}"></label>
+    <label>To (comma-separated)<input type="text" name="smtp_to" value="{{ smtp.to_addresses if smtp else '' }}"></label>
+    <button type="submit">Save SMTP</button>
+  </form>
+  <form method="post" action="/settings/notifications">
+    <label class="check"><input type="checkbox" name="on_backup_success" {% if not prefs or prefs.on_backup_success %}checked{% endif %}> Backup success</label>
+    <label class="check"><input type="checkbox" name="on_backup_failure" {% if not prefs or prefs.on_backup_failure %}checked{% endif %}> Backup failure</label>
+    <label class="check"><input type="checkbox" name="on_push_failure" {% if not prefs or prefs.on_push_failure %}checked{% endif %}> DR push failure</label>
+    <label class="check"><input type="checkbox" name="on_pull_failure" {% if not prefs or prefs.on_pull_failure %}checked{% endif %}> DR pull failure</label>
+    <button type="submit">Save notification toggles</button>
+  </form>
+</section>
+
+<section class="card">
+  <h2 class="footer-heading">Check for updates</h2>
+  <form method="post" action="/settings/updates">
+    <label class="check"><input type="checkbox" name="check_updates_on_login" {% if check_updates_on_login %}checked{% endif %}> Check for a new Docker image when I sign in</label>
+    <button type="submit">Save</button>
+  </form>
+</section>
+{% endblock %}

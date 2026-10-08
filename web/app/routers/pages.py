@@ -1,0 +1,750 @@
+# Copyright (C) 2026 https://ludditious.com/
+# SPDX-License-Identifier: AGPL-3.0-or-later
+
+from __future__ import annotations
+
+from pathlib import Path
+from urllib.parse import quote
+
+from fastapi import APIRouter, Depends, File, Form, Request, UploadFile
+from fastapi.responses import FileResponse, HTMLResponse, RedirectResponse
+from fastapi.templating import Jinja2Templates
+from sqlalchemy.orm import Session
+
+from ..auth_constants import SECURITY_QUESTIONS
+from ..backup_retention import BACKUP_RETENTION_OPTIONS, BACKUPS_PER_PAGE, retention_days_from_form
+from ..config import get_settings
+from ..crypto import encrypt
+from ..database import get_db
+from ..deps import get_current_user
+from ..docker_discover import discover_npm_containers, single_high_confidence
+from ..models import (
+    DAY_KEYS,
+    BackupRunLog,
+    MasterInstance,
+    NpmBackup,
+    RemotePullSource,
+    RemoteToolBox,
+    SlaveInstance,
+    ToolBoxBackup,
+    User,
+)
+from ..npm_backup_service import (
+    backup_file_path,
+    create_npm_backup,
+    delete_npm_backup,
+    restore_npm_volumes,
+)
+from ..npm_bridge import (
+    apply_candidate_to_master,
+    apply_candidate_to_slave,
+    store_secret,
+    test_npm_connection,
+)
+from ..remote_toolbox import pull_latest_from_source, push_backup_to_remote
+from ..schedule_ui import INTERVAL_CHOICES, minutes_from_form
+from ..security import hash_password, verify_password
+from ..services import (
+    ensure_user_defaults,
+    recovery_answers_for_display,
+    run_user_backup,
+    save_recovery_answers,
+    user_has_recovery,
+)
+from ..toolbox_backup_service import (
+    create_toolbox_backup,
+    delete_toolbox_backup,
+    restore_toolbox_backup,
+)
+from ..update_checker import apply_update_session, check_for_update, session_update_available
+from ..version import APP_NAME, read_bundled_revision, read_bundled_version
+
+router = APIRouter()
+templates = Jinja2Templates(directory=str(Path(__file__).resolve().parent.parent / "templates"))
+
+
+def _ctx(request: Request, user: User, **extra):
+    settings = get_settings()
+    return {
+        "request": request,
+        "user": user,
+        "app_title": settings.app_title,
+        "app_name": APP_NAME,
+        "app_version": read_bundled_version(),
+        "app_revision": read_bundled_revision(),
+        "current_username": user.username,
+        "update_available": session_update_available(request.session),
+        **extra,
+    }
+
+
+def _paginated_backups(db: Session, user: User, *, is_automated: bool, page: int) -> tuple:
+    page = max(1, page)
+    base = db.query(NpmBackup).filter(NpmBackup.user_id == user.id, NpmBackup.is_automated.is_(is_automated))
+    total = base.count()
+    total_pages = max(1, (total + BACKUPS_PER_PAGE - 1) // BACKUPS_PER_PAGE)
+    if page > total_pages:
+        page = total_pages
+    rows = (
+        base.order_by(NpmBackup.created_at.desc())
+        .offset((page - 1) * BACKUPS_PER_PAGE)
+        .limit(BACKUPS_PER_PAGE)
+        .all()
+    )
+    return rows, page, total_pages, total
+
+
+@router.get("/dashboard", response_class=HTMLResponse)
+def dashboard(request: Request, user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    ensure_user_defaults(db, user)
+    recent = (
+        db.query(BackupRunLog)
+        .filter(BackupRunLog.user_id == user.id)
+        .order_by(BackupRunLog.started_at.desc())
+        .limit(8)
+        .all()
+    )
+    return templates.TemplateResponse(request, "dashboard.html", _ctx(request, user, recent=recent))
+
+
+@router.post("/backup-now")
+def backup_now(user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    ensure_user_defaults(db, user)
+    run_user_backup(db, user, trigger="manual")
+    return RedirectResponse("/logs", status_code=303)
+
+
+@router.get("/master", response_class=HTMLResponse)
+def master_page(
+    request: Request,
+    user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+    msg: str | None = None,
+    err: str | None = None,
+):
+    ensure_user_defaults(db, user)
+    master = user.master
+    candidates, discover_err = discover_npm_containers()
+    auto = single_high_confidence(candidates)
+    return templates.TemplateResponse(
+        request,
+        "master.html",
+        _ctx(
+            request,
+            user,
+            master=master,
+            candidates=candidates,
+            discover_err=discover_err,
+            auto_candidate=auto,
+            message=msg,
+            error=err,
+        ),
+    )
+
+
+@router.post("/master/save")
+def master_save(
+    user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+    api_url: str = Form(""),
+    identity: str = Form(""),
+    npm_password: str = Form(""),
+    data_path: str = Form(""),
+    letsencrypt_path: str = Form(""),
+    public_endpoint: str = Form(""),
+    link_group: str = Form("default"),
+    verify_tls: str | None = Form(None),
+    enabled: str | None = Form(None),
+    use_detected: str | None = Form(None),
+    candidate_id: str = Form(""),
+):
+    ensure_user_defaults(db, user)
+    master = user.master
+    assert master is not None
+    if use_detected == "on":
+        candidates, _ = discover_npm_containers()
+        for c in candidates:
+            if c.container_id == candidate_id.strip():
+                apply_candidate_to_master(master, c)
+                break
+    master.api_url = api_url.strip()
+    master.identity = identity.strip()
+    enc, _ = store_secret(npm_password, master.password_enc)
+    master.password_enc = enc
+    master.data_path = data_path.strip()
+    master.letsencrypt_path = letsencrypt_path.strip()
+    master.public_endpoint = public_endpoint.strip()
+    master.link_group = link_group.strip() or "default"
+    master.verify_tls = verify_tls == "on"
+    master.enabled = enabled != "off"
+    db.commit()
+    return RedirectResponse("/master?msg=Master%20saved", status_code=303)
+
+
+@router.post("/master/test")
+def master_test(
+    user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+    api_url: str = Form(""),
+    identity: str = Form(""),
+    npm_password: str = Form(""),
+    verify_tls: str | None = Form(None),
+):
+    ensure_user_defaults(db, user)
+    master = user.master
+    assert master is not None
+    res = test_npm_connection(
+        api_url=api_url,
+        identity=identity,
+        password_enc=master.password_enc,
+        form_secret=npm_password or None,
+        verify_tls=verify_tls == "on",
+    )
+    key = "msg" if res.ok else "err"
+    return RedirectResponse(f"/master?{key}={quote(res.message)}", status_code=303)
+
+
+@router.get("/slaves", response_class=HTMLResponse)
+def slaves_page(request: Request, user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    ensure_user_defaults(db, user)
+    slaves = sorted(user.slaves, key=lambda s: s.sort_order)
+    return templates.TemplateResponse(request, "slaves.html", _ctx(request, user, slaves=slaves))
+
+
+@router.post("/slaves/save")
+def slave_save(
+    user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+    slave_id: str = Form(""),
+    name: str = Form(""),
+    api_url: str = Form(""),
+    identity: str = Form(""),
+    npm_password: str = Form(""),
+    data_path: str = Form(""),
+    letsencrypt_path: str = Form(""),
+    public_endpoint: str = Form(""),
+    link_group: str = Form("default"),
+    verify_tls: str | None = Form(None),
+    enabled: str | None = Form(None),
+    auto_pull: str | None = Form(None),
+):
+    ensure_user_defaults(db, user)
+    sid = slave_id.strip()
+    if sid:
+        slave = db.get(SlaveInstance, int(sid))
+        if not slave or slave.user_id != user.id:
+            return RedirectResponse("/slaves?err=Not%20found", status_code=303)
+    else:
+        slave = SlaveInstance(user_id=user.id, sort_order=len(user.slaves))
+        db.add(slave)
+    slave.name = name.strip()
+    slave.api_url = api_url.strip()
+    slave.identity = identity.strip()
+    enc, _ = store_secret(npm_password, slave.password_enc)
+    slave.password_enc = enc
+    slave.data_path = data_path.strip()
+    slave.letsencrypt_path = letsencrypt_path.strip()
+    slave.public_endpoint = public_endpoint.strip()
+    slave.link_group = link_group.strip() or "default"
+    slave.verify_tls = verify_tls == "on"
+    slave.enabled = enabled != "off"
+    slave.auto_pull = auto_pull == "on"
+    db.commit()
+    return RedirectResponse("/slaves?msg=Saved", status_code=303)
+
+
+@router.post("/slaves/delete")
+def slave_delete(
+    user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+    slave_id: int = Form(...),
+):
+    slave = db.get(SlaveInstance, slave_id)
+    if slave and slave.user_id == user.id:
+        db.delete(slave)
+        db.commit()
+    return RedirectResponse("/slaves", status_code=303)
+
+
+@router.post("/slaves/restore")
+def slave_restore(
+    user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+    slave_id: int = Form(...),
+    backup_id: int = Form(...),
+):
+    slave = db.get(SlaveInstance, slave_id)
+    if not slave or slave.user_id != user.id:
+        return RedirectResponse("/slaves?err=Slave%20not%20found", status_code=303)
+    try:
+        lines = restore_npm_volumes(db, user, backup_id, target=slave)
+        msg = "; ".join(lines)
+        return RedirectResponse(f"/slaves?msg={quote(msg)}", status_code=303)
+    except ValueError as e:
+        return RedirectResponse(f"/slaves?err={quote(str(e))}", status_code=303)
+
+
+@router.get("/remote", response_class=HTMLResponse)
+def remote_page(request: Request, user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    ensure_user_defaults(db, user)
+    settings = get_settings()
+    return templates.TemplateResponse(
+        request,
+        "remote.html",
+        _ctx(
+            request,
+            user,
+            destinations=sorted(user.remote_destinations, key=lambda r: r.sort_order),
+            sources=sorted(user.remote_sources, key=lambda r: r.sort_order),
+            ingest_secret=settings.ingest_secret,
+        ),
+    )
+
+
+@router.post("/remote/destination/save")
+def remote_dest_save(
+    user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+    dest_id: str = Form(""),
+    name: str = Form(""),
+    base_url: str = Form(""),
+    ingest_token: str = Form(""),
+    enabled: str | None = Form(None),
+    push_after_backup: str | None = Form(None),
+):
+    sk = get_settings().secret_key
+    if dest_id.strip():
+        row = db.get(RemoteToolBox, int(dest_id))
+        if not row or row.user_id != user.id:
+            return RedirectResponse("/remote?err=Not%20found", status_code=303)
+    else:
+        row = RemoteToolBox(user_id=user.id, sort_order=len(user.remote_destinations))
+        db.add(row)
+    row.name = name.strip()
+    row.base_url = base_url.strip()
+    if ingest_token.strip():
+        row.ingest_token_enc = encrypt(sk, ingest_token.strip())
+    row.enabled = enabled != "off"
+    row.push_after_backup = push_after_backup != "off"
+    db.commit()
+    return RedirectResponse("/remote?msg=Saved", status_code=303)
+
+
+@router.post("/remote/source/save")
+def remote_source_save(
+    user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+    source_id: str = Form(""),
+    name: str = Form(""),
+    base_url: str = Form(""),
+    ingest_token: str = Form(""),
+    enabled: str | None = Form(None),
+):
+    sk = get_settings().secret_key
+    if source_id.strip():
+        row = db.get(RemotePullSource, int(source_id))
+        if not row or row.user_id != user.id:
+            return RedirectResponse("/remote?err=Not%20found", status_code=303)
+    else:
+        row = RemotePullSource(user_id=user.id, sort_order=len(user.remote_sources))
+        db.add(row)
+    row.name = name.strip()
+    row.base_url = base_url.strip()
+    if ingest_token.strip():
+        row.ingest_token_enc = encrypt(sk, ingest_token.strip())
+    row.enabled = enabled != "off"
+    db.commit()
+    return RedirectResponse("/remote?msg=Saved", status_code=303)
+
+
+@router.post("/remote/pull")
+def remote_pull(user: User = Depends(get_current_user), db: Session = Depends(get_db), source_id: int = Form(...)):
+    source = db.get(RemotePullSource, source_id)
+    if not source or source.user_id != user.id:
+        return RedirectResponse("/remote?err=Source%20not%20found", status_code=303)
+    try:
+        pulled = pull_latest_from_source(source)
+        from ..services import ingest_snapshot_file
+
+        meta = pulled["meta"]
+        content = pulled["response"].content
+        ingest_snapshot_file(
+            db,
+            file_name=f"pull-{meta.get('name', 'remote')}.zip",
+            file_bytes=content,
+            name=str(meta.get("name") or "remote"),
+            snapshot_id=str(meta.get("snapshot_id") or ""),
+        )
+        return RedirectResponse("/remote?msg=Pull%20completed", status_code=303)
+    except Exception as e:
+        return RedirectResponse(f"/remote?err={quote(str(e))}", status_code=303)
+
+
+@router.get("/schedule", response_class=HTMLResponse)
+def schedule_page(request: Request, user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    ensure_user_defaults(db, user)
+    sched = user.schedule
+    return templates.TemplateResponse(
+        request,
+        "schedule.html",
+        _ctx(
+            request,
+            user,
+            schedule=sched,
+            day_keys=DAY_KEYS,
+            interval_choices=INTERVAL_CHOICES,
+        ),
+    )
+
+
+@router.post("/schedule/save")
+def schedule_save(
+    user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+    enabled: str | None = Form(None),
+    interval_minutes: str = Form("1440"),
+    days: list[str] = Form(default=[]),
+):
+    ensure_user_defaults(db, user)
+    sched = user.schedule
+    assert sched is not None
+    sched.enabled = enabled == "on"
+    sched.interval_minutes = minutes_from_form(interval_minutes)
+    sched.set_days({d.lower() for d in days if d.lower() in DAY_KEYS})
+    db.commit()
+    return RedirectResponse("/schedule?msg=Saved", status_code=303)
+
+
+@router.get("/logs", response_class=HTMLResponse)
+def logs_page(request: Request, user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    rows = (
+        db.query(BackupRunLog)
+        .filter(BackupRunLog.user_id == user.id)
+        .order_by(BackupRunLog.started_at.desc())
+        .limit(40)
+        .all()
+    )
+    return templates.TemplateResponse(request, "logs.html", _ctx(request, user, logs=rows))
+
+
+@router.get("/backups", response_class=HTMLResponse)
+def backups_page(
+    request: Request,
+    user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+    manual_page: int = 1,
+    auto_page: int = 1,
+    msg: str | None = None,
+    err: str | None = None,
+):
+    manual, mp, mpages, mtotal = _paginated_backups(db, user, is_automated=False, page=manual_page)
+    auto, ap, apages, atotal = _paginated_backups(db, user, is_automated=True, page=auto_page)
+    toolbox = (
+        db.query(ToolBoxBackup)
+        .filter(ToolBoxBackup.user_id == user.id)
+        .order_by(ToolBoxBackup.created_at.desc())
+        .limit(12)
+        .all()
+    )
+    return templates.TemplateResponse(
+        request,
+        "backups.html",
+        _ctx(
+            request,
+            user,
+            manual_backups=manual,
+            manual_page=mp,
+            manual_pages=mpages,
+            manual_total=mtotal,
+            auto_backups=auto,
+            auto_page=ap,
+            auto_pages=apages,
+            auto_total=atotal,
+            toolbox_backups=toolbox,
+            message=msg or err,
+            message_class="notice notice-ok" if msg else ("notice notice-err" if err else ""),
+        ),
+    )
+
+
+@router.post("/backups/create")
+def backups_create(user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    run_user_backup(db, user, trigger="manual")
+    return RedirectResponse("/backups?msg=Backup%20created", status_code=303)
+
+
+@router.get("/backups/download/{backup_id}")
+def backups_download(backup_id: int, user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    row = db.get(NpmBackup, backup_id)
+    if not row or row.user_id != user.id:
+        return RedirectResponse("/backups?err=Not%20found", status_code=303)
+    path = backup_file_path(row)
+    return FileResponse(path, filename=row.file_name, media_type="application/zip")
+
+
+@router.post("/backups/delete")
+def backups_delete(
+    user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+    backup_id: int = Form(...),
+):
+    try:
+        delete_npm_backup(db, user, backup_id)
+    except ValueError as e:
+        return RedirectResponse(f"/backups?err={quote(str(e))}", status_code=303)
+    return RedirectResponse("/backups?msg=Deleted", status_code=303)
+
+
+@router.post("/backups/restore-master")
+def backups_restore_master(
+    user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+    backup_id: int = Form(...),
+):
+    try:
+        lines = restore_npm_volumes(db, user, backup_id)
+        return RedirectResponse(f"/backups?msg={quote('; '.join(lines))}", status_code=303)
+    except ValueError as e:
+        return RedirectResponse(f"/backups?err={quote(str(e))}", status_code=303)
+
+
+@router.post("/backups/push")
+def backups_push(
+    user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+    backup_id: int = Form(...),
+    dest_id: int = Form(...),
+):
+    row = db.get(NpmBackup, backup_id)
+    dest = db.get(RemoteToolBox, dest_id)
+    if not row or row.user_id != user.id or not dest or dest.user_id != user.id:
+        return RedirectResponse("/backups?err=Invalid%20selection", status_code=303)
+    try:
+        push_backup_to_remote(dest, row, backup_file_path(row))
+        return RedirectResponse("/backups?msg=Pushed", status_code=303)
+    except Exception as e:
+        return RedirectResponse(f"/backups?err={quote(str(e))}", status_code=303)
+
+
+@router.post("/backups/toolbox/create")
+def toolbox_backup_create(user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    create_toolbox_backup(db, user)
+    return RedirectResponse("/backups?msg=ToolBox%20config%20saved", status_code=303)
+
+
+@router.get("/backups/toolbox/{backup_id}/download")
+def toolbox_download(backup_id: int, user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    row = db.get(ToolBoxBackup, backup_id)
+    if not row or row.user_id != user.id:
+        return RedirectResponse("/backups?err=Not%20found", status_code=303)
+    from fastapi.responses import Response
+
+    return Response(
+        content=row.payload_json,
+        media_type="application/json",
+        headers={"Content-Disposition": f'attachment; filename="{row.name}.json"'},
+    )
+
+
+@router.post("/backups/toolbox/{backup_id}/restore")
+def toolbox_backup_restore(
+    backup_id: int,
+    user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    try:
+        restore_toolbox_backup(db, user, backup_id)
+        return RedirectResponse("/backups?msg=ToolBox%20config%20restored", status_code=303)
+    except ValueError as e:
+        return RedirectResponse(f"/backups?err={quote(str(e))}", status_code=303)
+
+
+@router.post("/backups/toolbox/{backup_id}/delete")
+def toolbox_backup_delete(
+    backup_id: int,
+    user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    try:
+        delete_toolbox_backup(db, user, backup_id)
+    except ValueError as e:
+        return RedirectResponse(f"/backups?err={quote(str(e))}", status_code=303)
+    return RedirectResponse("/backups?msg=Deleted", status_code=303)
+
+
+@router.get("/settings", response_class=HTMLResponse)
+def settings_page(
+    request: Request,
+    user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+    msg: str | None = None,
+    err: str | None = None,
+):
+    ensure_user_defaults(db, user)
+    sk = get_settings().secret_key
+    settings = get_settings()
+    npm_settings = user.npm_backup_settings
+    smtp = user.smtp_settings
+    prefs = user.notification_prefs
+    return templates.TemplateResponse(
+        request,
+        "settings.html",
+        _ctx(
+            request,
+            user,
+            message=msg or err,
+            message_class="notice notice-ok" if msg else ("notice notice-err" if err else "notice"),
+            security_questions=SECURITY_QUESTIONS,
+            recovery_answers=recovery_answers_for_display(user, sk),
+            recovery_reenter=user_has_recovery(user) and not any(recovery_answers_for_display(user, sk)),
+            recovery_configured=user_has_recovery(user),
+            check_updates_on_login=user.check_updates_on_login,
+            auto_backup_enabled=npm_settings.enabled if npm_settings else False,
+            auto_backup_retention_days=npm_settings.retention_days if npm_settings else 30,
+            include_api=npm_settings.include_api if npm_settings else True,
+            include_volumes=npm_settings.include_volumes if npm_settings else True,
+            backup_retention_options=BACKUP_RETENTION_OPTIONS,
+            ingest_secret=settings.ingest_secret,
+            smtp=smtp,
+            prefs=prefs,
+        ),
+    )
+
+
+@router.post("/settings/account/password")
+def settings_password(
+    user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+    current_password: str = Form(""),
+    new_password: str = Form(""),
+    confirm_password: str = Form(""),
+):
+    if not verify_password(current_password, user.password_hash):
+        return RedirectResponse("/settings?err=Current%20password%20incorrect", status_code=303)
+    if len(new_password) < 8 or new_password != confirm_password:
+        return RedirectResponse("/settings?err=Password%20invalid", status_code=303)
+    user.password_hash = hash_password(new_password)
+    db.commit()
+    return RedirectResponse("/settings?msg=Password%20updated", status_code=303)
+
+
+@router.post("/settings/account/recovery")
+def settings_recovery(
+    user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+    answer_1: str = Form(""),
+    answer_2: str = Form(""),
+    answer_3: str = Form(""),
+):
+    try:
+        save_recovery_answers(user, (answer_1, answer_2, answer_3), get_settings().secret_key)
+        db.commit()
+    except ValueError as e:
+        return RedirectResponse(f"/settings?err={quote(str(e))}", status_code=303)
+    return RedirectResponse("/settings?msg=Recovery%20saved", status_code=303)
+
+
+@router.post("/settings/automated-backup")
+def settings_auto_backup(
+    user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+    auto_backup_enabled: str | None = Form(None),
+    auto_backup_retention: str = Form("30"),
+    include_api: str | None = Form(None),
+    include_volumes: str | None = Form(None),
+):
+    ensure_user_defaults(db, user)
+    row = user.npm_backup_settings
+    assert row is not None
+    row.enabled = auto_backup_enabled == "on"
+    row.retention_days = retention_days_from_form(auto_backup_retention)
+    row.include_api = include_api != "off"
+    row.include_volumes = include_volumes != "off"
+    db.commit()
+    return RedirectResponse("/settings?msg=Backup%20settings%20saved", status_code=303)
+
+
+@router.post("/settings/updates")
+def settings_updates(
+    user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+    check_updates_on_login: str | None = Form(None),
+):
+    user.check_updates_on_login = check_updates_on_login == "on"
+    db.commit()
+    return RedirectResponse("/settings?msg=Update%20preference%20saved", status_code=303)
+
+
+@router.post("/settings/smtp")
+def settings_smtp(
+    user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+    smtp_enabled: str | None = Form(None),
+    smtp_host: str = Form(""),
+    smtp_port: str = Form("587"),
+    smtp_use_tls: str | None = Form(None),
+    smtp_username: str = Form(""),
+    smtp_password: str = Form(""),
+    smtp_from: str = Form(""),
+    smtp_to: str = Form(""),
+):
+    sk = get_settings().secret_key
+    ensure_user_defaults(db, user)
+    smtp = user.smtp_settings
+    assert smtp is not None
+    smtp.enabled = smtp_enabled == "on"
+    smtp.host = smtp_host.strip()
+    smtp.port = int(smtp_port or "587")
+    smtp.use_tls = smtp_use_tls != "off"
+    if smtp_username.strip():
+        smtp.username_enc = encrypt(sk, smtp_username.strip())
+    if smtp_password.strip():
+        smtp.password_enc = encrypt(sk, smtp_password.strip())
+    smtp.from_address = smtp_from.strip()
+    smtp.to_addresses = smtp_to.strip()
+    db.commit()
+    return RedirectResponse("/settings?msg=SMTP%20saved", status_code=303)
+
+
+@router.post("/settings/notifications")
+def settings_notifications(
+    user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+    on_backup_success: str | None = Form(None),
+    on_backup_failure: str | None = Form(None),
+    on_push_failure: str | None = Form(None),
+    on_pull_failure: str | None = Form(None),
+):
+    ensure_user_defaults(db, user)
+    prefs = user.notification_prefs
+    assert prefs is not None
+    prefs.on_backup_success = on_backup_success != "off"
+    prefs.on_backup_failure = on_backup_failure != "off"
+    prefs.on_push_failure = on_push_failure != "off"
+    prefs.on_pull_failure = on_pull_failure != "off"
+    db.commit()
+    return RedirectResponse("/settings?msg=Notifications%20saved", status_code=303)
+
+
+@router.get("/about", response_class=HTMLResponse)
+def about_page(request: Request, user: User = Depends(get_current_user)):
+    return templates.TemplateResponse(request, "about.html", _ctx(request, user))
+
+
+@router.get("/update", response_class=HTMLResponse)
+def update_page(request: Request, user: User = Depends(get_current_user)):
+    status = check_for_update()
+    apply_update_session(request.session, status)
+    return templates.TemplateResponse(
+        request,
+        "update.html",
+        _ctx(
+            request,
+            user,
+            installed_version=status.installed_version,
+            remote_version=status.remote_version,
+            pull_command=status.pull_command,
+            release_notes=status.release_notes,
+            update_check_error=status.error,
+        ),
+    )

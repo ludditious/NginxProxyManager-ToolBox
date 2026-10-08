@@ -1,0 +1,13 @@
+{% extends "base.html" %}
+{% block title %} - Backup{% endblock %}
+{% block content %}
+<h1>Backup & Restore</h1>
+{% if message %}
+<div class="cmd-copy-block">
+  <textarea readonly class="cmd-box message-box{% if message_class %} {{ message_class }}{% endif %}" id="backup-msg" rows="5">{{ message }}</textarea>
+  <button type="button" class="copy-cmd" data-target="backup-msg">Copy</button>
+</div>
+{% endif %}
+{% include "_backup_panel.html" %}
+{% include "_toolbox_backup_panel.html" %}
+{% endblock %}

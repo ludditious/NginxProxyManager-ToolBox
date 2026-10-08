@@ -1,0 +1,13 @@
+{% extends "base.html" %}
+{% block title %} - Log{% endblock %}
+{% block content %}
+<h1>Backup log</h1>
+{% for log in logs %}
+<section class="card">
+  <h2>{{ log.started_at }} · {{ log.trigger }} · {% if log.exit_code == 0 %}OK{% else %}Failed{% endif %}</h2>
+  <pre class="log-body">{{ log.body }}</pre>
+</section>
+{% else %}
+<p class="muted">No log entries yet.</p>
+{% endfor %}
+{% endblock %}

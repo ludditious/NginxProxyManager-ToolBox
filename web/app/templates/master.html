@@ -1,0 +1,57 @@
+{% extends "base.html" %}
+{% block title %} - Master{% endblock %}
+{% block content %}
+<h1>Master NPM instance</h1>
+{% if message %}<p class="notice notice-ok">{{ message }}</p>{% endif %}
+{% if error %}<p class="notice notice-err">{{ error }}</p>{% endif %}
+<p class="muted small">Configure API access and volume paths manually, or pick a discovered Docker container when the socket is mounted.</p>
+
+{% if discover_err %}
+<p class="notice notice-warn">{{ discover_err }}</p>
+{% elif candidates %}
+<section class="card">
+  <h2 class="footer-heading">Discovered containers</h2>
+  {% if auto_candidate %}
+  <p class="muted small">One high-confidence candidate was detected. Confirm below or pick another row.</p>
+  {% endif %}
+  <table>
+    <thead><tr><th>Name</th><th>Image</th><th>Confidence</th><th>Data path</th><th>Admin URL</th></tr></thead>
+    <tbody>
+    {% for c in candidates %}
+      <tr>
+        <td>{{ c.name }}</td>
+        <td class="small muted">{{ c.image }}</td>
+        <td>{{ c.confidence }}</td>
+        <td class="small">{{ c.data_path }}</td>
+        <td>{{ c.suggested_api_url }}</td>
+      </tr>
+    {% endfor %}
+    </tbody>
+  </table>
+</section>
+{% endif %}
+
+<form method="post" action="/master/save" class="card">
+  {% if auto_candidate %}
+  <label class="check">
+    <input type="checkbox" name="use_detected" value="on">
+    Use detected instance ({{ auto_candidate.name }})
+  </label>
+  <input type="hidden" name="candidate_id" value="{{ auto_candidate.container_id }}">
+  {% endif %}
+  <label>API base URL<input type="url" name="api_url" value="{{ master.api_url if master else '' }}" placeholder="http://127.0.0.1:81" required></label>
+  <label>NPM login email<input type="email" name="identity" value="{{ master.identity if master else '' }}" required></label>
+  <div class="password-row">
+    <label>NPM password<input type="password" name="npm_password" class="pw-field" autocomplete="new-password"></label>
+    <button type="button" class="pw-toggle">Show</button>
+  </div>
+  <label>Host path to NPM <code>/data</code><input type="text" name="data_path" value="{{ master.data_path if master else '' }}"></label>
+  <label>Host path to NPM <code>/etc/letsencrypt</code><input type="text" name="letsencrypt_path" value="{{ master.letsencrypt_path if master else '' }}"></label>
+  <label>Public endpoint (optional)<input type="text" name="public_endpoint" value="{{ master.public_endpoint if master else '' }}" placeholder="How clients reach this NPM host"></label>
+  <label>Link group<input type="text" name="link_group" value="{{ master.link_group if master else 'default' }}"></label>
+  <label class="check"><input type="checkbox" name="verify_tls" {% if master and master.verify_tls %}checked{% endif %}> Verify TLS</label>
+  <label class="check"><input type="checkbox" name="enabled" checked> Enabled</label>
+  <button type="submit">Save master</button>
+  <button type="submit" formaction="/master/test" formmethod="post">Test connection</button>
+</form>
+{% endblock %}

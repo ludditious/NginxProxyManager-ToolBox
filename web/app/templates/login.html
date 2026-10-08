@@ -1,0 +1,18 @@
+{% extends "base.html" %}
+{% block title %} - Login{% endblock %}
+{% block content %}
+<section class="card narrow">
+  <h1>Sign in</h1>
+  {% if show_default_login %}
+  <p class="notice notice-warn small">Default login is <strong>admin / password</strong> until you change it under Settings.</p>
+  {% endif %}
+  {% if error %}<p class="notice notice-err">{{ error }}</p>{% endif %}
+  <form method="post" action="/login">
+    <label>Username<input type="text" name="username" required autocomplete="username"></label>
+    <label>Password<input type="password" name="password" required autocomplete="current-password"></label>
+    <button type="submit">Sign in</button>
+  </form>
+  <p class="muted"><a href="/recover">Forgot password?</a></p>
+  <p class="muted small login-build-id">Version {{ app_version }} · Revised {{ app_revision }}</p>
+</section>
+{% endblock %}
