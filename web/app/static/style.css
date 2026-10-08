@@ -175,6 +175,9 @@ body:has(.auth-main) {
   min-height: 3rem;
   word-break: break-all;
 }
+.help-intro p { margin: 0 0 0.65rem; line-height: 1.45; }
+.help-intro p:last-child { margin-bottom: 0; }
+.form-panel h2.footer-heading { margin-top: 0; }
 .card, form:not(.inline-form):not(.logout-form) {
   background: var(--card);
   padding: 1rem 1.25rem;

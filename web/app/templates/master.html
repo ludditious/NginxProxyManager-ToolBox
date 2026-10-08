@@ -5,18 +5,20 @@
 <h1>Master NPM instance</h1>
 {% if message %}<p class="notice notice-ok">{{ message }}</p>{% endif %}
 {% if error %}<p class="notice notice-err">{{ error }}</p>{% endif %}
-<p class="muted small">Configure API access and volume paths manually, or pick a discovered Docker container when the socket is mounted.</p>
+
+{% include "_setup_help.html" %}
 
 {% if discover_err %}
 <p class="notice notice-warn">{{ discover_err }}</p>
 {% elif candidates %}
 <section class="card panel-wide">
-  <h2 class="footer-heading">Discovered containers</h2>
+  <h2 class="footer-heading">Discovered NPM containers</h2>
+  <p class="muted small">Optional. Pick a row, check <em>Use detected instance</em>, then Save. Requires Docker socket access.</p>
   {% if auto_candidate %}
   <p class="muted small">One high-confidence candidate was detected. Confirm below or pick another row.</p>
   {% endif %}
   <table>
-    <thead><tr><th>Name</th><th>Image</th><th>Confidence</th><th>Data path</th><th>Admin URL</th></tr></thead>
+    <thead><tr><th>Name</th><th>Image</th><th>Confidence</th><th>Data folder on host</th><th>Admin URL</th></tr></thead>
     <tbody>
     {% for c in candidates %}
       <tr>
@@ -33,6 +35,7 @@
 {% endif %}
 
 <form method="post" action="/master/save" class="card">
+  <h2 class="footer-heading">Connection (required for backup)</h2>
   {% if auto_candidate %}
   <label class="check">
     <input type="checkbox" name="use_detected" value="on">
@@ -40,17 +43,38 @@
   </label>
   <input type="hidden" name="candidate_id" value="{{ auto_candidate.container_id }}">
   {% endif %}
-  <label>API base URL<input type="url" name="api_url" value="{{ master.api_url if master else '' }}" placeholder="http://127.0.0.1:81" required></label>
-  <label>NPM login email<input type="email" name="identity" value="{{ master.identity if master else '' }}" required></label>
+  <label>NPM admin web address
+    <input type="url" name="api_url" value="{{ master.api_url if master else '' }}" placeholder="http://127.0.0.1:81" required>
+  </label>
+  <p class="muted small">The URL you open in a browser to manage NPM (scheme + host + port). Use <code>http://</code> unless you know NPM admin is HTTPS-only.</p>
+  <label>NPM login email
+    <input type="email" name="identity" value="{{ master.identity if master else '' }}" required>
+  </label>
   <div class="password-row">
-    <label>NPM password<input type="password" name="npm_password" class="pw-field" autocomplete="new-password"></label>
+    <label>NPM password
+      <input type="password" name="npm_password" class="pw-field" autocomplete="new-password">
+    </label>
     <button type="button" class="pw-toggle">Show</button>
   </div>
-  <label>Host path to NPM <code>/data</code><input type="text" name="data_path" value="{{ master.data_path if master else '' }}"></label>
-  <label>Host path to NPM <code>/etc/letsencrypt</code><input type="text" name="letsencrypt_path" value="{{ master.letsencrypt_path if master else '' }}"></label>
-  <label>Public endpoint (optional)<input type="text" name="public_endpoint" value="{{ master.public_endpoint if master else '' }}" placeholder="How clients reach this NPM host"></label>
-  <label>Link group<input type="text" name="link_group" value="{{ master.link_group if master else 'default' }}"></label>
-  <label class="check"><input type="checkbox" name="verify_tls" {% if master and master.verify_tls %}checked{% endif %}> Verify TLS</label>
+  <p class="muted small">Same credentials as the NPM web UI. Leave password blank on Save to keep the stored password.</p>
+
+  <h2 class="footer-heading">On-disk folders (optional)</h2>
+  <label>Data folder path <span class="muted">(NPM <code>/data</code>)</span>
+    <input type="text" name="data_path" value="{{ master.data_path if master else '' }}" placeholder="/npm-data">
+  </label>
+  <label>Certificates folder path <span class="muted">(NPM <code>/etc/letsencrypt</code>)</span>
+    <input type="text" name="letsencrypt_path" value="{{ master.letsencrypt_path if master else '' }}" placeholder="/npm-letsencrypt">
+  </label>
+  <p class="muted small">Enter the path <strong>inside this ToolBox container</strong> where those NPM folders are mounted read-only—not the path on your host unless they are the same. Example: if your compose file maps NPM data to <code>/npm-data</code> in this container, type <code>/npm-data</code>. Skip both fields if you only want API configuration backups.</p>
+
+  <label>Public address (optional)
+    <input type="text" name="public_endpoint" value="{{ master.public_endpoint if master else '' }}" placeholder="npm.example.com">
+  </label>
+  <p class="muted small">For your notes only: how users reach this NPM on the internet after DNS or a reverse proxy. Not used for backup.</p>
+  <label>Link group
+    <input type="text" name="link_group" value="{{ master.link_group if master else 'default' }}">
+  </label>
+  <label class="check"><input type="checkbox" name="verify_tls" {% if master and master.verify_tls %}checked{% endif %}> Verify TLS when calling NPM API</label>
   <label class="check"><input type="checkbox" name="enabled" checked> Enabled</label>
   <button type="submit">Save master</button>
   <button type="submit" formaction="/master/test" formmethod="post">Test connection</button>

@@ -1,0 +1,6 @@
+<section class="card panel-wide help-intro">
+  <h2 class="footer-heading">What this app does</h2>
+  <p class="small">This ToolBox backs up your <strong>Nginx Proxy Manager</strong> setup: proxy hosts, certificates list, users, and related settings. You can download backups, copy them to another server, and restore when something breaks or you move hosts.</p>
+  <p class="small muted"><strong>Minimum setup:</strong> NPM admin web address (usually port <code>81</code>) and the same email/password you use to sign in to NPM. That runs a <em>configuration</em> backup through the NPM API.</p>
+  <p class="small muted"><strong>Full backup (optional):</strong> also archive NPM’s on-disk data and Let’s Encrypt files. Those live in two folders inside the NPM container (<code>/data</code> and <code>/etc/letsencrypt</code>). You only need the two folder paths below if Settings → automated backup has <em>Include volume archives</em> turned on, or you want restore-to-disk.</p>
+</section>

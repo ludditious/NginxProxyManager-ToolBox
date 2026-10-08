@@ -8,6 +8,19 @@ from typing import Any
 
 from npmtbx.client import NpmClient
 
+DOCKER_DISCOVER_HELP = (
+    "Auto-detect needs the Docker socket mounted into this container "
+    "(for example /var/run/docker.sock read-only). If you did not add that, ignore this message: "
+    "fill in the NPM admin address and login below. That is enough for a configuration backup."
+)
+
+
+def _friendly_docker_error(exc: BaseException) -> str:
+    text = str(exc)
+    if isinstance(exc, FileNotFoundError) or "No such file" in text or "Connection aborted" in text:
+        return DOCKER_DISCOVER_HELP
+    return f"Cannot connect to Docker: {exc}"
+
 
 @dataclass(frozen=True)
 class NpmCandidate:
@@ -58,7 +71,7 @@ def discover_npm_containers(*, probe_api: bool = True) -> tuple[list[NpmCandidat
     try:
         client = docker.from_env()
     except Exception as e:
-        return [], f"Cannot connect to Docker: {e}"
+        return [], _friendly_docker_error(e)
 
     candidates: list[NpmCandidate] = []
     try:

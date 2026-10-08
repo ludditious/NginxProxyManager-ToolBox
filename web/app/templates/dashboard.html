@@ -1,6 +1,8 @@
 {% extends "base.html" %}
 {% block content %}
 <h1>Dashboard</h1>
+{% include "_setup_help.html" %}
+<p class="muted small">First time? Open <a href="/master">Master</a>, enter NPM admin URL and login, Test connection, then Save. Use <strong>Backup now</strong> when ready.</p>
 <form method="post" action="/backup-now" class="inline-block">
   <button type="submit" class="primary">Backup now</button>
 </form>
