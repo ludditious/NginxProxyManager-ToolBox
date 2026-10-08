@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import ipaddress
+import json
 import re
 import socket
 
@@ -46,10 +47,77 @@ def _valid_connect_target(text: str) -> str:
     return raw
 
 
-def parse_host_override_map(text: str | None) -> dict[str, str]:
-    """Parse lines: ``admin-host connect-target`` (space, tab, or =). Keys are lowercased."""
+def _validate_override_hostname(text: str) -> str:
+    raw = (text or "").strip()
+    if not raw:
+        raise ValueError("Host / domain name is required.")
+    if "://" in raw or "/" in raw:
+        raise ValueError(f"Enter only the hostname, not a URL: {raw}")
+    if not re.match(r"^[a-zA-Z0-9.\-:]+$", raw):
+        raise ValueError(f"Invalid hostname: {raw}")
+    if is_literal_ip(raw):
+        raise ValueError("Host / domain must be the NPM name, not an IP address.")
+    return raw
+
+
+def host_override_rows_from_form(
+    hosts: list[str] | None, targets: list[str] | None
+) -> list[tuple[str, str]]:
+    hs = hosts or []
+    ts = targets or []
+    n = max(len(hs), len(ts))
+    rows: list[tuple[str, str]] = []
+    for i in range(n):
+        h = (hs[i] if i < len(hs) else "").strip()
+        t = (ts[i] if i < len(ts) else "").strip()
+        if not h and not t:
+            continue
+        rows.append((_validate_override_hostname(h), _valid_connect_target(t)))
+    return rows
+
+
+def host_override_map_from_rows(rows: list[tuple[str, str]]) -> dict[str, str]:
     out: dict[str, str] = {}
-    for line in (text or "").splitlines():
+    for host, target in rows:
+        key = host.lower()
+        if key in out and out[key] != target:
+            raise ValueError(f"Duplicate host override for {host}.")
+        out[key] = target
+    return out
+
+
+def host_override_rows_from_storage(text: str | None) -> list[dict[str, str]]:
+    raw = (text or "").strip()
+    if not raw:
+        return [{"host": "", "target": ""}]
+    if raw.startswith("["):
+        try:
+            data = json.loads(raw)
+        except json.JSONDecodeError as e:
+            raise ValueError("Stored host overrides are invalid.") from e
+        if not isinstance(data, list):
+            raise ValueError("Stored host overrides are invalid.")
+        rows: list[dict[str, str]] = []
+        for item in data:
+            if not isinstance(item, dict):
+                continue
+            rows.append(
+                {
+                    "host": str(item.get("host") or "").strip(),
+                    "target": str(item.get("target") or "").strip(),
+                }
+            )
+        return rows or [{"host": "", "target": ""}]
+    pairs = _parse_host_override_lines(raw)
+    if not pairs:
+        return [{"host": "", "target": ""}]
+    return [{"host": h, "target": t} for h, t in pairs]
+
+
+def _parse_host_override_lines(text: str) -> list[tuple[str, str]]:
+    """Legacy line format: ``hostname target`` (space, tab, or =)."""
+    rows: list[tuple[str, str]] = []
+    for line in text.splitlines():
         line = line.strip()
         if not line or line.startswith("#"):
             continue
@@ -60,21 +128,27 @@ def parse_host_override_map(text: str | None) -> dict[str, str]:
             if len(parts) != 2:
                 raise ValueError(f"Invalid host override line (need hostname and address): {line}")
             name_part, target_part = parts
-        name = name_part.strip().lower()
+        host = _validate_override_hostname(name_part)
         target = _valid_connect_target(target_part)
-        if not name or "://" in name:
-            raise ValueError(f"Invalid hostname in override: {parts[0]}")
-        if is_literal_ip(name):
-            raise ValueError(
-                f"Override left side must be the NPM hostname, not an IP: {name_part.strip()}"
-            )
-        out[name] = target
-    return out
+        rows.append((host, target))
+    return rows
 
 
-def format_host_override_map(mapping: dict[str, str]) -> str:
-    lines = [f"{host} {target}" for host, target in sorted(mapping.items())]
-    return "\n".join(lines)
+def host_override_map_from_storage(text: str | None) -> dict[str, str]:
+    raw = (text or "").strip()
+    if not raw:
+        return {}
+    if raw.startswith("["):
+        rows = host_override_rows_from_storage(raw)
+    else:
+        rows = [{"host": h, "target": t} for h, t in _parse_host_override_lines(raw)]
+    pairs = [(r["host"], r["target"]) for r in rows if r.get("host") and r.get("target")]
+    return host_override_map_from_rows(pairs)
+
+
+def serialize_host_override_rows(rows: list[tuple[str, str]]) -> str:
+    payload = [{"host": h, "target": t} for h, t in rows]
+    return json.dumps(payload, ensure_ascii=False)
 
 
 def resolve_hostname(hostname: str, *, dns_servers: list[str] | None) -> str:

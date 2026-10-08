@@ -11,7 +11,7 @@ from npmtbx.client import NpmClient, NpmError
 from npmtbx.dns_resolve import (
     is_literal_ip,
     parse_dns_server_list,
-    parse_host_override_map,
+    host_override_map_from_storage,
 )
 
 from .config import get_settings
@@ -52,7 +52,7 @@ def npm_host_overrides_for_user(user) -> dict[str, str] | None:
     row = getattr(user, "npm_dns_settings", None)
     if not row or not row.use_host_overrides:
         return None
-    mapping = parse_host_override_map(row.host_overrides)
+    mapping = host_override_map_from_storage(row.host_overrides)
     return mapping or None
 
 

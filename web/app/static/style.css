@@ -256,6 +256,20 @@ button.linkish { background: transparent; color: var(--muted); padding: 0; }
 .badge-ok { color: var(--ok); font-size: 0.85rem; font-weight: 600; }
 .badge-warn { color: var(--warn); font-size: 0.85rem; font-weight: 600; }
 .row-actions { display: flex; gap: 0.75rem; flex-wrap: wrap; margin-top: 0.5rem; }
+.host-override-list { display: flex; flex-direction: column; gap: 0.75rem; margin: 0.75rem 0; }
+.host-override-row {
+  display: grid;
+  grid-template-columns: 1fr 1fr auto;
+  gap: 0.75rem;
+  align-items: end;
+}
+.host-override-row label { margin: 0; }
+.host-override-row input { margin-top: 0.25rem; }
+button.btn-muted { background: var(--btn-muted); }
+@media (max-width: 640px) {
+  .host-override-row { grid-template-columns: 1fr; }
+  .host-override-remove { justify-self: start; }
+}
 .password-row { display: flex; gap: 0.5rem; align-items: center; margin-top: 0.25rem; }
 .password-row .pw-field { flex: 1; margin-top: 0; }
 button.pw-toggle { background: var(--btn-muted); flex-shrink: 0; }

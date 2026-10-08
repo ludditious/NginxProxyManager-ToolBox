@@ -79,6 +79,11 @@ class NpmClient:
             root = f"{scheme}://{connect}:{port}".rstrip("/")
             http_host = logical if port in (80, 443) else f"{logical}:{port}"
             return root, http_host
+        admin = (admin_host or "").strip()
+        if admin and host and admin.lower() != host.lower() and not is_literal_ip(admin):
+            root = base_url.rstrip("/")
+            http_host = admin if port in (80, 443) else f"{admin}:{port}"
+            return root, http_host
         if not host or is_literal_ip(host):
             return base_url.rstrip("/"), None
         try:

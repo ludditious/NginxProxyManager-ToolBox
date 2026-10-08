@@ -37,9 +37,11 @@ from ..npm_backup_service import (
 )
 from ..npm_address import build_api_url_from_form, parse_api_url, validate_host
 from npmtbx.dns_resolve import (
-    format_host_override_map,
+    host_override_map_from_rows,
+    host_override_rows_from_form,
+    host_override_rows_from_storage,
     parse_dns_server_list,
-    parse_host_override_map,
+    serialize_host_override_rows,
 )
 
 from ..npm_bridge import (
@@ -70,6 +72,13 @@ from ..version import APP_NAME, read_bundled_revision, read_bundled_version
 
 router = APIRouter()
 templates = Jinja2Templates(directory=str(Path(__file__).resolve().parent.parent / "templates"))
+
+
+def _host_override_rows_for_ui(stored: str) -> list[dict[str, str]]:
+    try:
+        return host_override_rows_from_storage(stored)
+    except ValueError:
+        return [{"host": "", "target": ""}]
 
 
 def _ctx(request: Request, user: User, **extra):
@@ -677,7 +686,9 @@ def settings_page(
             dns_use_custom=dns_settings.use_custom_dns if dns_settings else False,
             dns_servers=dns_settings.dns_servers if dns_settings else "",
             host_overrides_enabled=dns_settings.use_host_overrides if dns_settings else False,
-            host_overrides_text=dns_settings.host_overrides if dns_settings else "",
+            host_override_rows=_host_override_rows_for_ui(
+                dns_settings.host_overrides if dns_settings else ""
+            ),
             backup_retention_options=BACKUP_RETENTION_OPTIONS,
             ingest_secret=settings.ingest_secret,
             smtp=smtp,
@@ -753,26 +764,30 @@ def settings_host_overrides(
     user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
     use_host_overrides: str | None = Form(None),
-    host_overrides: str = Form(""),
+    override_host: list[str] = Form(default=[]),
+    override_target: list[str] = Form(default=[]),
 ):
     ensure_user_defaults(db, user)
     row = user.npm_dns_settings
     assert row is not None
     row.use_host_overrides = use_host_overrides == "on"
-    text = host_overrides.strip()
+    try:
+        pairs = host_override_rows_from_form(override_host, override_target)
+    except ValueError as e:
+        return RedirectResponse(f"/settings?err={quote(str(e))}", status_code=303)
     if row.use_host_overrides:
-        try:
-            mapping = parse_host_override_map(text)
-        except ValueError as e:
-            return RedirectResponse(f"/settings?err={quote(str(e))}", status_code=303)
-        if not mapping:
+        if not pairs:
             return RedirectResponse(
-                "/settings?err=Add%20at%20least%20one%20hostname%20override%20line",
+                "/settings?err=Enter%20host%20and%20target%20for%20at%20least%20one%20override",
                 status_code=303,
             )
-        row.host_overrides = format_host_override_map(mapping)
-    elif text:
-        row.host_overrides = text
+        try:
+            host_override_map_from_rows(pairs)
+        except ValueError as e:
+            return RedirectResponse(f"/settings?err={quote(str(e))}", status_code=303)
+        row.host_overrides = serialize_host_override_rows(pairs)
+    elif pairs:
+        row.host_overrides = serialize_host_override_rows(pairs)
     db.commit()
     return RedirectResponse("/settings?msg=Host%20override%20settings%20saved", status_code=303)
 

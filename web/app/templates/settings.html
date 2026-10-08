@@ -53,12 +53,31 @@
 <section class="card">
   <h2 class="footer-heading">Host overrides</h2>
   <p class="muted small">Use when the NPM hostname on the Master page does not resolve inside Docker, or DNS returns a LAN IP the container cannot reach. Map that hostname to an address the container <em>can</em> open (for example <code>host.docker.internal</code>, the Docker gateway, or the NPM container name). The ToolBox connects to the mapped address but sends an HTTP <code>Host</code> header with your original NPM hostname so the admin API still matches what you configured.</p>
-  <form method="post" action="/settings/host-overrides">
+  <form method="post" action="/settings/host-overrides" id="host-overrides-form">
     <label class="check"><input type="checkbox" name="use_host_overrides" {% if host_overrides_enabled %}checked{% endif %}> Enable hostname overrides for NPM connections</label>
-    <label>Overrides<textarea name="host_overrides" rows="5" placeholder="npm.lan host.docker.internal&#10;proxy.ourstuff.uk 172.17.0.1" autocomplete="off">{{ host_overrides_text }}</textarea></label>
-    <p class="muted small">One line per mapping: NPM hostname, then connect address (separated by space, tab, or <code>=</code>). Lines starting with <code>#</code> are ignored. Disabled when the checkbox is off.</p>
-    <button type="submit">Save host overrides</button>
+    <p class="muted small">On Master, use the <strong>host / domain name</strong> in the NPM host field (leave Connect via empty). The ToolBox opens the target below but sends that name in the <code>Host</code> header.</p>
+    <div class="host-override-list" id="host-override-list">
+      {% for row in host_override_rows %}
+      <div class="host-override-row">
+        <label>Host / domain name<input type="text" name="override_host" value="{{ row.host }}" placeholder="proxy.ourstuff.uk" autocomplete="off"></label>
+        <label>Target IP<input type="text" name="override_target" value="{{ row.target }}" placeholder="host.docker.internal" autocomplete="off"></label>
+        <button type="button" class="btn-muted host-override-remove" aria-label="Remove row">Remove</button>
+      </div>
+      {% endfor %}
+    </div>
+    <p class="muted small">Target must be reachable from inside this container (often <code>host.docker.internal</code>, not a LAN IP the container cannot route to).</p>
+    <div class="row-actions">
+      <button type="button" class="btn-muted" id="host-override-add">Add mapping</button>
+      <button type="submit">Save host overrides</button>
+    </div>
   </form>
+  <template id="host-override-row-template">
+    <div class="host-override-row">
+      <label>Host / domain name<input type="text" name="override_host" value="" placeholder="proxy.ourstuff.uk" autocomplete="off"></label>
+      <label>Target IP<input type="text" name="override_target" value="" placeholder="host.docker.internal" autocomplete="off"></label>
+      <button type="button" class="btn-muted host-override-remove" aria-label="Remove row">Remove</button>
+    </div>
+  </template>
 </section>
 
 <section class="card">

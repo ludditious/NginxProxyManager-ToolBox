@@ -66,6 +66,36 @@ document.querySelectorAll(".pw-toggle").forEach((btn) => {
   });
 })();
 
+(function initHostOverrideRows() {
+  const list = document.getElementById("host-override-list");
+  const addBtn = document.getElementById("host-override-add");
+  const tpl = document.getElementById("host-override-row-template");
+  if (!list || !addBtn || !tpl) return;
+
+  function bindRemove(row) {
+    const btn = row.querySelector(".host-override-remove");
+    if (!btn) return;
+    btn.addEventListener("click", () => {
+      const rows = list.querySelectorAll(".host-override-row");
+      if (rows.length <= 1) {
+        row.querySelectorAll("input").forEach((input) => {
+          input.value = "";
+        });
+        return;
+      }
+      row.remove();
+    });
+  }
+
+  list.querySelectorAll(".host-override-row").forEach(bindRemove);
+
+  addBtn.addEventListener("click", () => {
+    const node = tpl.content.firstElementChild.cloneNode(true);
+    list.appendChild(node);
+    bindRemove(node);
+  });
+})();
+
 document.querySelectorAll(".copy-cmd").forEach((btn) => {
   btn.addEventListener("click", async () => {
     const id = btn.getAttribute("data-target");
