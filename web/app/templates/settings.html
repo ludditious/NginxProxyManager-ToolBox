@@ -44,7 +44,7 @@
   <p class="muted small">By default the container uses its normal resolver (Docker / host). Enable custom DNS when NPM hostnames only resolve on your LAN (Pi-hole, router, AdGuard Home, etc.).</p>
   <form method="post" action="/settings/dns">
     <label class="check"><input type="checkbox" name="use_custom_dns" {% if dns_use_custom %}checked{% endif %}> Use custom LAN DNS for NPM connections</label>
-    <label>DNS server IP(s)<input type="text" name="dns_servers" value="{{ dns_servers }}" placeholder="192.168.1.1" autocomplete="off"></label>
+    <label>DNS server IP(s)<input type="text" name="dns_servers" value="{{ dns_servers }}" placeholder="10.0.0.1" autocomplete="off"></label>
     <p class="muted small">Comma-separated IPv4 addresses. Ignored when custom DNS is off.</p>
     <button type="submit">Save DNS settings</button>
   </form>
@@ -52,20 +52,20 @@
 
 <section class="card">
   <h2 class="footer-heading">Host overrides</h2>
-  <p class="muted small">Use when the NPM hostname on the Master page does not resolve inside Docker, or DNS returns a LAN IP the container cannot reach. Map that hostname to an address the container <em>can</em> open (for example <code>host.docker.internal</code>, the Docker gateway, or the NPM container name). The ToolBox connects to the mapped address but sends an HTTP <code>Host</code> header with your original NPM hostname so the admin API still matches what you configured.</p>
+  <p class="muted small">Use when the NPM hostname on Master does not resolve inside Docker, or resolves to an IP the container cannot reach. Map that hostname to a target IP (or internal name) the ToolBox can open. Connections use the target IP; HTTP and TLS use your NPM hostname.</p>
   <form method="post" action="/settings/host-overrides" id="host-overrides-form">
     <label class="check"><input type="checkbox" name="use_host_overrides" {% if host_overrides_enabled %}checked{% endif %}> Enable hostname overrides for NPM connections</label>
     <p class="muted small">On Master, use the <strong>host / domain name</strong> in the NPM host field (leave Connect via empty). The ToolBox opens the target below but sends that name in the <code>Host</code> header.</p>
     <div class="host-override-list" id="host-override-list">
       {% for row in host_override_rows %}
       <div class="host-override-row">
-        <label>Host / domain name<input type="text" name="override_host" value="{{ row.host }}" placeholder="proxy.ourstuff.uk" autocomplete="off"></label>
-        <label>Target IP<input type="text" name="override_target" value="{{ row.target }}" placeholder="host.docker.internal" autocomplete="off"></label>
+        <label>Host / domain name<input type="text" name="override_host" value="{{ row.host }}" placeholder="npm-admin.example.local" autocomplete="off"></label>
+        <label>Target IP<input type="text" name="override_target" value="{{ row.target }}" placeholder="10.0.0.50" autocomplete="off"></label>
         <button type="button" class="btn-muted host-override-remove" aria-label="Remove row">Remove</button>
       </div>
       {% endfor %}
     </div>
-    <p class="muted small">Target must be reachable from inside this container (often <code>host.docker.internal</code>, not a LAN IP the container cannot route to).</p>
+    <p class="muted small">Target IP is where the ToolBox opens the TCP connection. It must be reachable from this container (your NPM machine or gateway on the LAN).</p>
     <div class="row-actions">
       <button type="button" class="btn-muted" id="host-override-add">Add mapping</button>
       <button type="submit">Save host overrides</button>
@@ -73,8 +73,8 @@
   </form>
   <template id="host-override-row-template">
     <div class="host-override-row">
-      <label>Host / domain name<input type="text" name="override_host" value="" placeholder="proxy.ourstuff.uk" autocomplete="off"></label>
-      <label>Target IP<input type="text" name="override_target" value="" placeholder="host.docker.internal" autocomplete="off"></label>
+      <label>Host / domain name<input type="text" name="override_host" value="" placeholder="npm-admin.example.local" autocomplete="off"></label>
+      <label>Target IP<input type="text" name="override_target" value="" placeholder="10.0.0.50" autocomplete="off"></label>
       <button type="button" class="btn-muted host-override-remove" aria-label="Remove row">Remove</button>
     </div>
   </template>

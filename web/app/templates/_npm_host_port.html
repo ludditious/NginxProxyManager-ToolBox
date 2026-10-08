@@ -4,7 +4,7 @@
     name="npm_host"
     value="{{ npm_host }}"
     autocomplete="off"
-    placeholder="192.168.200.124"
+    placeholder="10.0.0.50"
     required
     title="IP or hostname only — no http:// or https://"
   >
@@ -38,7 +38,7 @@
     name="connect_host"
     value="{{ connect_host }}"
     autocomplete="off"
-    placeholder="host.docker.internal"
+    placeholder="npm-gateway.example.local"
   >
 </label>
-<p class="muted small">Leave blank to connect to the host above. If LAN IP or hostname fails from Docker, use <code>host.docker.internal</code>, your NPM <strong>container name</strong> on a shared network, or the host gateway IP. ToolBox calls this address; “NPM host” can stay your LAN IP for your notes.</p>
+<p class="muted small">Leave blank to connect to the host above. If the host fails from Docker, enter an alternate reachability address (gateway, container name, or internal DNS name). The NPM host field can stay the name you use for NPM itself.</p>

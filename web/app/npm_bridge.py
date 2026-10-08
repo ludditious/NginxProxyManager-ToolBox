@@ -8,10 +8,11 @@ from urllib.parse import urlparse
 
 import requests
 from npmtbx.client import NpmClient, NpmError
+from npmtbx.connection_errors import friendly_connection_error
 from npmtbx.dns_resolve import (
+    host_override_map_from_storage,
     is_literal_ip,
     parse_dns_server_list,
-    host_override_map_from_storage,
 )
 
 from .config import get_settings
@@ -67,71 +68,12 @@ def npm_admin_host_for_master(master: MasterInstance) -> str | None:
 def _connection_error_message(api_url: str, exc: Exception, *, verify_tls: bool) -> str:
     parsed = urlparse(NpmClient.normalize_api_url(api_url))
     host = parsed.hostname or ""
-    lines: list[str] = []
-
-    if is_literal_ip(host):
-        text = str(exc).lower()
-        port = parsed.port or (443 if parsed.scheme == "https" else 80)
-        lines.append(
-            f"Could not reach NPM at {host}:{port} from inside this ToolBox container."
-        )
-        lines.append(
-            "That value is an IP address, not a DNS name — the failure is network reachability, not name lookup."
-        )
-        if "connection refused" in text or "econnrefused" in text:
-            lines.append(
-                "Nothing accepted a connection on that host and port. Confirm NPM admin/API listens there."
-            )
-        elif "timed out" in text or "timeout" in text:
-            lines.append("The connection timed out — check firewall and routing from Docker to that address.")
-        lines.append(
-            "On the same Docker host, try Connect via host.docker.internal, the host gateway, "
-            "or the NPM container name on a shared network instead of a LAN IP."
-        )
-        return " ".join(lines)
-
     if _is_dns_failure(exc, host):
-        lines.append(f"The ToolBox could not resolve the hostname “{host}”.")
-        lines.append(
-            "Try Settings → DNS for a LAN resolver, or Settings → Host overrides to map the NPM hostname "
-            "to an address the container can reach (with the original Host header)."
+        return (
+            f"The ToolBox could not resolve “{host}”. "
+            "Try Settings → DNS for a LAN resolver, or Settings → Host overrides."
         )
-        lines.append(
-            "Public proxy hostnames are often not the NPM admin API — use the admin host/IP and port you use in a browser."
-        )
-        return " ".join(lines)
-
-    text = str(exc).lower()
-    if "connection refused" in text or "econnrefused" in text:
-        lines.append(
-            f"Nothing on {parsed.scheme}://{host}:{parsed.port or ''} accepted a connection from inside this ToolBox container."
-        )
-        lines.append(
-            "If NPM and ToolBox run on the same Docker host, a LAN IP often fails from inside a container. "
-            "Set “Connect via” to host.docker.internal (see compose extra_hosts), the host gateway (often 172.17.0.1 on Linux), "
-            "or the NPM container name on a shared Docker network."
-        )
-        lines.append(
-            "Confirm the port is where NPM admin/API listens, not only public proxied sites on 80/443."
-        )
-        return " ".join(lines)
-    if "timed out" in text or "timeout" in text:
-        lines.append(
-            "Connection timed out from the container to that address. Check firewall, routing, and that NPM is reachable from other containers on this host."
-        )
-        return " ".join(lines)
-
-    lines.append(str(exc).strip())
-    if isinstance(exc, requests.exceptions.SSLError) or "SSL" in str(exc):
-        lines.append(
-            "SSL/TLS failed for the host and port you selected. "
-            "Check NPM host and port match the admin UI you use in a browser."
-        )
-        if parsed.scheme == "https" and verify_tls:
-            lines.append('Turn off “Verify TLS certificate” if the cert does not match this host.')
-        elif parsed.scheme == "https":
-            lines.append("Port 443 uses HTTPS; port 80 uses HTTP. Pick the port where NPM admin actually listens.")
-    return " ".join(lines)
+    return friendly_connection_error(api_url, exc, verify_tls=verify_tls)
 
 
 def resolve_secret(password_enc: str, form_secret: str | None) -> tuple[str | None, str | None]:

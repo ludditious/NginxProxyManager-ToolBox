@@ -9,6 +9,8 @@ from urllib.parse import urljoin, urlparse
 import requests
 
 from .dns_resolve import is_literal_ip, resolve_hostname
+from .http_sni import SNIHTTPSAdapter
+from .npm_errors import friendly_auth_failure, sni_hostname_from_host_header
 
 
 class NpmError(Exception):
@@ -55,6 +57,7 @@ class NpmClient:
             host_overrides=host_overrides,
             admin_host=admin_host,
         )
+        self._configure_https_sni()
 
     def _request_verify(self) -> bool:
         """Only validate certificates when the user explicitly enabled Verify TLS."""
@@ -94,6 +97,16 @@ class NpmClient:
         http_host = host if port in (80, 443) else f"{host}:{port}"
         return root, http_host
 
+    def _configure_https_sni(self) -> None:
+        parsed = urlparse(self._request_root)
+        if parsed.scheme != "https" or not self._http_host:
+            return
+        sni = sni_hostname_from_host_header(self._http_host)
+        tcp_host = parsed.hostname or ""
+        if not sni or sni.lower() == tcp_host.lower():
+            return
+        self._session.mount("https://", SNIHTTPSAdapter(sni))
+
     def _extra_headers(self) -> dict[str, str]:
         if not self._http_host:
             return {}
@@ -109,7 +122,7 @@ class NpmClient:
             headers=self._extra_headers(),
         )
         if resp.status_code >= 400:
-            raise NpmError(f"Authentication failed ({resp.status_code}): {resp.text[:500]}")
+            raise NpmError(friendly_auth_failure(resp.status_code, resp.text))
         data = resp.json()
         token = data.get("token") if isinstance(data, dict) else None
         if not token:

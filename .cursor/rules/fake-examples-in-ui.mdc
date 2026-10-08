@@ -1,0 +1,12 @@
+---
+description: Use only fictional hostnames and IPs in app UI, docs, and placeholders
+alwaysApply: true
+---
+
+# Fictional examples only
+
+In this repository (templates, help text, placeholders, sample config, error message examples):
+
+- Never copy the user's real domains, hostnames, or IP addresses from chat or tickets into the product.
+- Use clearly fake values: `example.com`, `example.local`, `npm-admin.example.local`, RFC-style IPs like `10.0.0.50`, `10.0.0.1`.
+- Do not use the user's LAN ranges (e.g. `192.168.x.x` they posted) as placeholders unless they explicitly ask for that literal in code.
