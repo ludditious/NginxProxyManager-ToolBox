@@ -1,6 +1,7 @@
 {% extends "base.html" %}
 {% block title %} - Remote DR{% endblock %}
 {% block content %}
+<div class="page-form-layout">
 <h1>Remote ToolBox (DR)</h1>
 {% if request.query_params.get('msg') %}<p class="notice notice-ok">{{ request.query_params.get('msg') }}</p>{% endif %}
 {% if request.query_params.get('err') %}<p class="notice notice-err">{{ request.query_params.get('err') }}</p>{% endif %}
@@ -15,7 +16,7 @@
 <section class="card">
   <h2 class="footer-heading">Push destinations</h2>
   {% for d in destinations %}
-  <form method="post" action="/remote/destination/save" class="card nested">
+  <form method="post" action="/remote/destination/save" class="form-panel card nested">
     <input type="hidden" name="dest_id" value="{{ d.id }}">
     <label>Name<input type="text" name="name" value="{{ d.name }}"></label>
     <label>ToolBox base URL<input type="url" name="base_url" value="{{ d.base_url }}"></label>
@@ -25,7 +26,7 @@
     <button type="submit">Save</button>
   </form>
   {% endfor %}
-  <form method="post" action="/remote/destination/save" class="card nested">
+  <form method="post" action="/remote/destination/save" class="form-panel card nested">
     <h3>Add destination</h3>
     <label>Name<input type="text" name="name" required></label>
     <label>ToolBox base URL<input type="url" name="base_url" required></label>
@@ -37,7 +38,7 @@
 <section class="card">
   <h2 class="footer-heading">Pull sources</h2>
   {% for s in sources %}
-  <form method="post" action="/remote/source/save" class="card nested">
+  <form method="post" action="/remote/source/save" class="form-panel card nested">
     <input type="hidden" name="source_id" value="{{ s.id }}">
     <label>Name<input type="text" name="name" value="{{ s.name }}"></label>
     <label>ToolBox base URL<input type="url" name="base_url" value="{{ s.base_url }}"></label>
@@ -50,7 +51,7 @@
     <button type="submit">Pull latest from {{ s.name or s.id }}</button>
   </form>
   {% endfor %}
-  <form method="post" action="/remote/source/save" class="card nested">
+  <form method="post" action="/remote/source/save" class="form-panel card nested">
     <h3>Add pull source</h3>
     <label>Name<input type="text" name="name" required></label>
     <label>ToolBox base URL<input type="url" name="base_url" required></label>
@@ -58,4 +59,5 @@
     <button type="submit">Add</button>
   </form>
 </section>
+</div>
 {% endblock %}

@@ -1,6 +1,7 @@
 {% extends "base.html" %}
 {% block title %} - Slaves{% endblock %}
 {% block content %}
+<div class="page-form-layout">
 <h1>Slave NPM instances</h1>
 {% if request.query_params.get('msg') %}<p class="notice notice-ok">{{ request.query_params.get('msg') }}</p>{% endif %}
 {% if request.query_params.get('err') %}<p class="notice notice-err">{{ request.query_params.get('err') }}</p>{% endif %}
@@ -31,4 +32,5 @@
   <label>Letsencrypt path<input type="text" name="letsencrypt_path"></label>
   <button type="submit">Add</button>
 </form>
+</div>
 {% endblock %}

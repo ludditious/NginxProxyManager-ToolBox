@@ -1,7 +1,7 @@
 {% extends "base.html" %}
 {% block title %} - Recover{% endblock %}
 {% block content %}
-<section class="card narrow">
+<section class="card narrow auth-card">
   <h1>Forgot password</h1>
   {% if error %}<p class="notice notice-err">{{ error }}</p>{% endif %}
   {% if success %}<p class="notice notice-ok">{{ success }}</p>{% endif %}

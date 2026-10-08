@@ -1,6 +1,7 @@
 {% extends "base.html" %}
 {% block title %} - Schedule{% endblock %}
 {% block content %}
+<div class="page-form-layout">
 <h1>Schedule</h1>
 <p class="muted">Built-in scheduler checks every minute (UTC). When your interval has passed on a selected day, a backup runs.</p>
 <form method="post" action="/schedule/save" class="card">
@@ -22,4 +23,5 @@
   </fieldset>
   <button type="submit">Save schedule</button>
 </form>
+</div>
 {% endblock %}

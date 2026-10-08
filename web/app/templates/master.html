@@ -1,6 +1,7 @@
 {% extends "base.html" %}
 {% block title %} - Master{% endblock %}
 {% block content %}
+<div class="page-form-layout">
 <h1>Master NPM instance</h1>
 {% if message %}<p class="notice notice-ok">{{ message }}</p>{% endif %}
 {% if error %}<p class="notice notice-err">{{ error }}</p>{% endif %}
@@ -9,7 +10,7 @@
 {% if discover_err %}
 <p class="notice notice-warn">{{ discover_err }}</p>
 {% elif candidates %}
-<section class="card">
+<section class="card panel-wide">
   <h2 class="footer-heading">Discovered containers</h2>
   {% if auto_candidate %}
   <p class="muted small">One high-confidence candidate was detected. Confirm below or pick another row.</p>
@@ -54,4 +55,5 @@
   <button type="submit">Save master</button>
   <button type="submit" formaction="/master/test" formmethod="post">Test connection</button>
 </form>
+</div>
 {% endblock %}

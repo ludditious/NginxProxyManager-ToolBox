@@ -40,8 +40,13 @@
       <button type="button" class="theme-toggle" id="theme-toggle" aria-label="Switch light or dark theme">Light</button>
     </div>
   </header>
+  {% else %}
+  <header class="top minimal-top">
+    <div class="brand">{{ app_title }}</div>
+    <button type="button" class="theme-toggle" id="theme-toggle" aria-label="Switch light or dark theme">Light</button>
+  </header>
   {% endif %}
-  <main class="content">
+  <main class="{% if minimal_layout %}auth-main{% else %}container{% endif %}">
     {% block content %}{% endblock %}
   </main>
   <script src="/static/app.js"></script>
