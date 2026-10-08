@@ -50,6 +50,22 @@ document.querySelectorAll(".pw-toggle").forEach((btn) => {
   });
 })();
 
+(function initPortPreset() {
+  document.querySelectorAll("form").forEach((form) => {
+    const sel = form.querySelector(".port-preset-select");
+    const wrap = form.querySelector(".custom-port-field");
+    const custom = form.querySelector(".npm-port-custom");
+    if (!sel || !wrap) return;
+    function sync() {
+      const customOn = sel.value === "custom";
+      wrap.hidden = !customOn;
+      if (custom) custom.required = customOn;
+    }
+    sel.addEventListener("change", sync);
+    sync();
+  });
+})();
+
 document.querySelectorAll(".copy-cmd").forEach((btn) => {
   btn.addEventListener("click", async () => {
     const id = btn.getAttribute("data-target");

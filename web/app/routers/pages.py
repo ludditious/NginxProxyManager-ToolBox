@@ -35,6 +35,7 @@ from ..npm_backup_service import (
     delete_npm_backup,
     restore_npm_volumes,
 )
+from ..npm_address import build_api_url_from_form, parse_api_url
 from ..npm_bridge import (
     apply_candidate_to_master,
     apply_candidate_to_slave,
@@ -126,6 +127,7 @@ def master_page(
     master = user.master
     candidates, discover_err = discover_npm_containers()
     auto = single_high_confidence(candidates)
+    npm_host, port_preset, npm_port_custom = parse_api_url(master.api_url if master else "")
     return templates.TemplateResponse(
         request,
         "master.html",
@@ -133,6 +135,9 @@ def master_page(
             request,
             user,
             master=master,
+            npm_host=npm_host,
+            port_preset=port_preset,
+            npm_port_custom=npm_port_custom,
             candidates=candidates,
             discover_err=discover_err,
             auto_candidate=auto,
@@ -146,7 +151,9 @@ def master_page(
 def master_save(
     user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
-    api_url: str = Form(""),
+    npm_host: str = Form(""),
+    port_preset: str = Form("80"),
+    npm_port_custom: str = Form(""),
     identity: str = Form(""),
     npm_password: str = Form(""),
     data_path: str = Form(""),
@@ -167,7 +174,10 @@ def master_save(
             if c.container_id == candidate_id.strip():
                 apply_candidate_to_master(master, c)
                 break
-    master.api_url = api_url.strip()
+    try:
+        master.api_url = build_api_url_from_form(npm_host, port_preset, npm_port_custom)
+    except ValueError as e:
+        return RedirectResponse(f"/master?err={quote(str(e))}", status_code=303)
     master.identity = identity.strip()
     enc, _ = store_secret(npm_password, master.password_enc)
     master.password_enc = enc
@@ -185,7 +195,9 @@ def master_save(
 def master_test(
     user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
-    api_url: str = Form(""),
+    npm_host: str = Form(""),
+    port_preset: str = Form("80"),
+    npm_port_custom: str = Form(""),
     identity: str = Form(""),
     npm_password: str = Form(""),
     verify_tls: str | None = Form(None),
@@ -193,6 +205,10 @@ def master_test(
     ensure_user_defaults(db, user)
     master = user.master
     assert master is not None
+    try:
+        api_url = build_api_url_from_form(npm_host, port_preset, npm_port_custom)
+    except ValueError as e:
+        return RedirectResponse(f"/master?err={quote(str(e))}", status_code=303)
     res = test_npm_connection(
         api_url=api_url,
         identity=identity,
@@ -208,7 +224,13 @@ def master_test(
 def slaves_page(request: Request, user: User = Depends(get_current_user), db: Session = Depends(get_db)):
     ensure_user_defaults(db, user)
     slaves = sorted(user.slaves, key=lambda s: s.sort_order)
-    return templates.TemplateResponse(request, "slaves.html", _ctx(request, user, slaves=slaves))
+    slave_rows = []
+    for s in slaves:
+        h, pr, cu = parse_api_url(s.api_url)
+        slave_rows.append({"slave": s, "npm_host": h, "port_preset": pr, "npm_port_custom": cu})
+    return templates.TemplateResponse(
+        request, "slaves.html", _ctx(request, user, slave_rows=slave_rows)
+    )
 
 
 @router.post("/slaves/save")
@@ -217,7 +239,9 @@ def slave_save(
     db: Session = Depends(get_db),
     slave_id: str = Form(""),
     name: str = Form(""),
-    api_url: str = Form(""),
+    npm_host: str = Form(""),
+    port_preset: str = Form("80"),
+    npm_port_custom: str = Form(""),
     identity: str = Form(""),
     npm_password: str = Form(""),
     data_path: str = Form(""),
@@ -238,7 +262,10 @@ def slave_save(
         slave = SlaveInstance(user_id=user.id, sort_order=len(user.slaves))
         db.add(slave)
     slave.name = name.strip()
-    slave.api_url = api_url.strip()
+    try:
+        slave.api_url = build_api_url_from_form(npm_host, port_preset, npm_port_custom)
+    except ValueError as e:
+        return RedirectResponse(f"/slaves?err={quote(str(e))}", status_code=303)
     slave.identity = identity.strip()
     enc, _ = store_secret(npm_password, slave.password_enc)
     slave.password_enc = enc

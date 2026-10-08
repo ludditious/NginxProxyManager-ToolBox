@@ -1,0 +1,33 @@
+<label>NPM host (IP or hostname)
+  <input
+    type="text"
+    name="npm_host"
+    value="{{ npm_host }}"
+    autocomplete="off"
+    placeholder="192.168.200.124"
+    required
+    title="IP or hostname only — no http:// or https://"
+  >
+</label>
+<p class="muted small">Address only — do not include <code>http://</code>, <code>https://</code>, or a port here.</p>
+
+<label>Port
+  <select name="port_preset" class="port-preset-select" required>
+    <option value="80" {% if port_preset == '80' %}selected{% endif %}>Port 80</option>
+    <option value="443" {% if port_preset == '443' %}selected{% endif %}>Port 443</option>
+    <option value="custom" {% if port_preset == 'custom' %}selected{% endif %}>Custom</option>
+  </select>
+</label>
+<label class="custom-port-field" {% if port_preset != 'custom' %}hidden{% endif %}>
+  Custom port
+  <input
+    type="number"
+    name="npm_port_custom"
+    class="npm-port-custom"
+    value="{{ npm_port_custom }}"
+    min="1"
+    max="65535"
+    placeholder="8080"
+  >
+</label>
+<p class="muted small">Port <code>80</code> → <code>http://</code>. Port <code>443</code> → <code>https://</code>. Other custom ports → <code>http://</code>.</p>

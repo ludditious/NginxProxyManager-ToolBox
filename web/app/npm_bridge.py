@@ -22,22 +22,17 @@ class TestResult:
 
 
 def _connection_error_message(api_url: str, exc: Exception, *, verify_tls: bool) -> str:
-    hint = NpmClient.admin_url_hint(api_url)
     parsed = urlparse(NpmClient.normalize_api_url(api_url))
     lines = [str(exc).strip()]
     if isinstance(exc, requests.exceptions.SSLError) or "SSL" in str(exc):
         lines.append(
-            "SSL/TLS failed. The NPM *admin API* is usually plain HTTP on port 81, "
-            "not the public HTTPS address on port 443."
+            "SSL/TLS failed for the host and port you selected. "
+            "Check NPM host and port match the admin UI you use in a browser."
         )
-        if hint:
-            lines.append(f"Try: {hint}")
-        if verify_tls:
-            lines.append("Turn off “Verify TLS certificate” unless NPM admin is HTTPS with a valid cert.")
+        if parsed.scheme == "https" and verify_tls:
+            lines.append('Turn off “Verify TLS certificate” if the cert does not match this host.')
         elif parsed.scheme == "https":
-            lines.append(
-                "If you meant the admin UI, switch the address to http://…:81 instead of https://…:443."
-            )
+            lines.append("Port 443 uses HTTPS; port 80 uses HTTP. Pick the port where NPM admin actually listens.")
     return " ".join(lines)
 
 
@@ -115,14 +110,21 @@ def test_npm_connection(
 
 
 def apply_candidate_to_master(master: MasterInstance, candidate) -> None:
+    from .npm_address import PORT_PRESET_CUSTOM, build_api_url_from_form
+
     master.docker_container_id = candidate.container_id
     master.docker_image = candidate.image
     if candidate.data_path:
         master.data_path = candidate.data_path
     if candidate.letsencrypt_path:
         master.letsencrypt_path = candidate.letsencrypt_path
-    if candidate.suggested_api_url and not master.api_url.strip():
-        master.api_url = candidate.suggested_api_url
+    if candidate.admin_port and not master.api_url.strip():
+        port = (candidate.admin_port or "").strip()
+        host = "127.0.0.1"
+        if port in ("80", "443"):
+            master.api_url = build_api_url_from_form(host, port, "")
+        elif port.isdigit():
+            master.api_url = build_api_url_from_form(host, PORT_PRESET_CUSTOM, port)
 
 
 def apply_candidate_to_slave(slave: SlaveInstance, candidate) -> None:
@@ -132,5 +134,12 @@ def apply_candidate_to_slave(slave: SlaveInstance, candidate) -> None:
         slave.data_path = candidate.data_path
     if candidate.letsencrypt_path:
         slave.letsencrypt_path = candidate.letsencrypt_path
-    if candidate.suggested_api_url and not slave.api_url.strip():
-        slave.api_url = candidate.suggested_api_url
+    if candidate.admin_port and not slave.api_url.strip():
+        from .npm_address import PORT_PRESET_CUSTOM, build_api_url_from_form
+
+        port = (candidate.admin_port or "").strip()
+        host = "127.0.0.1"
+        if port in ("80", "443"):
+            slave.api_url = build_api_url_from_form(host, port, "")
+        elif port.isdigit():
+            slave.api_url = build_api_url_from_form(host, PORT_PRESET_CUSTOM, port)

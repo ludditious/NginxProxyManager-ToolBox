@@ -118,12 +118,3 @@ class NpmClient:
             return raw.rstrip("/")
         return f"{parsed.scheme}://{parsed.netloc}".rstrip("/")
 
-    @staticmethod
-    def admin_url_hint(api_url: str) -> str:
-        parsed = urlparse(NpmClient.normalize_api_url(api_url))
-        host = parsed.hostname or ""
-        if not host:
-            return "http://YOUR-NPM-HOST:81"
-        if parsed.port == 81 and parsed.scheme == "http":
-            return ""
-        return f"http://{host}:81"

@@ -6,12 +6,15 @@
 {% if request.query_params.get('msg') %}<p class="notice notice-ok">{{ request.query_params.get('msg') }}</p>{% endif %}
 {% if request.query_params.get('err') %}<p class="notice notice-err">{{ request.query_params.get('err') }}</p>{% endif %}
 
-{% for s in slaves %}
+{% for row in slave_rows %}
+{% set s = row.slave %}
 <form method="post" action="/slaves/save" class="card">
   <input type="hidden" name="slave_id" value="{{ s.id }}">
   <h2>{{ s.name or ('Slave ' ~ s.id) }}</h2>
   <label>Name<input type="text" name="name" value="{{ s.name }}"></label>
-  <label>API URL<input type="url" name="api_url" value="{{ s.api_url }}"></label>
+  {% with npm_host=row.npm_host, port_preset=row.port_preset, npm_port_custom=row.npm_port_custom %}
+  {% include "_npm_host_port.html" %}
+  {% endwith %}
   <label>Identity<input type="email" name="identity" value="{{ s.identity }}"></label>
   <label>Data path<input type="text" name="data_path" value="{{ s.data_path }}"></label>
   <label>Letsencrypt path<input type="text" name="letsencrypt_path" value="{{ s.letsencrypt_path }}"></label>
@@ -26,7 +29,9 @@
 <form method="post" action="/slaves/save" class="card">
   <h2>Add slave</h2>
   <label>Name<input type="text" name="name" required></label>
-  <label>API URL<input type="url" name="api_url"></label>
+  {% with npm_host='', port_preset='80', npm_port_custom='' %}
+  {% include "_npm_host_port.html" %}
+  {% endwith %}
   <label>Identity<input type="email" name="identity"></label>
   <label>Data path<input type="text" name="data_path"></label>
   <label>Letsencrypt path<input type="text" name="letsencrypt_path"></label>

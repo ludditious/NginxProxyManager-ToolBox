@@ -45,13 +45,17 @@ def _mount_dest_map(mounts: list[Any]) -> dict[str, str]:
     return out
 
 
-def _published_port(ports: dict | None, container_port: str = "81/tcp") -> str:
+def _published_port(ports: dict | None) -> str:
     if not ports:
         return ""
-    binding = ports.get(container_port)
+    binding = None
+    for container_port in ("80/tcp", "81/tcp", "443/tcp"):
+        binding = ports.get(container_port)
+        if binding:
+            break
     if not binding:
         for key, val in ports.items():
-            if key.startswith("81/") and val:
+            if key.startswith(("80/", "81/", "443/")) and val:
                 binding = val
                 break
     if not binding:
@@ -108,7 +112,7 @@ def discover_npm_containers(*, probe_api: bool = True) -> tuple[list[NpmCandidat
             if admin_port:
                 suggested = f"http://127.0.0.1:{admin_port}"
             elif name:
-                suggested = f"http://{name}:81"
+                suggested = f"http://{name}:80"
 
             if probe_api and suggested:
                 try:
