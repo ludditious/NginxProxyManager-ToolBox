@@ -50,6 +50,8 @@ def migrate_schema() -> None:
         ("master_instances", "connect_host", "VARCHAR(512) NOT NULL DEFAULT ''"),
         ("slave_instances", "admin_host", "VARCHAR(512) NOT NULL DEFAULT ''"),
         ("slave_instances", "connect_host", "VARCHAR(512) NOT NULL DEFAULT ''"),
+        ("npm_dns_settings", "use_host_overrides", "BOOLEAN NOT NULL DEFAULT 0"),
+        ("npm_dns_settings", "host_overrides", "TEXT NOT NULL DEFAULT ''"),
     )
     with engine.begin() as conn:
         for table, column, ddl in patches:

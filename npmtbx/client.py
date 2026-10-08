@@ -38,6 +38,8 @@ class NpmClient:
         verify_tls: bool = False,
         timeout: int = 120,
         dns_servers: list[str] | None = None,
+        host_overrides: dict[str, str] | None = None,
+        admin_host: str | None = None,
     ) -> None:
         self.base_url = self.normalize_api_url(base_url)
         self.identity = identity.strip()
@@ -47,7 +49,12 @@ class NpmClient:
         self._token: str | None = None
         self._session = requests.Session()
         self._session.headers.update({"User-Agent": "NginxProxyManager-ToolBox/1.0"})
-        self._request_root, self._http_host = self._connection_target(self.base_url, dns_servers)
+        self._request_root, self._http_host = self._connection_target(
+            self.base_url,
+            dns_servers,
+            host_overrides=host_overrides,
+            admin_host=admin_host,
+        )
 
     def _request_verify(self) -> bool:
         """Only validate certificates when the user explicitly enabled Verify TLS."""
@@ -55,12 +62,23 @@ class NpmClient:
 
     @staticmethod
     def _connection_target(
-        base_url: str, dns_servers: list[str] | None
+        base_url: str,
+        dns_servers: list[str] | None,
+        *,
+        host_overrides: dict[str, str] | None = None,
+        admin_host: str | None = None,
     ) -> tuple[str, str | None]:
         parsed = urlparse(base_url)
         host = parsed.hostname or ""
         scheme = parsed.scheme or "http"
         port = parsed.port or (443 if scheme == "https" else 80)
+        logical = (admin_host or host).strip()
+        logical_key = logical.lower()
+        if host_overrides and logical_key in host_overrides:
+            connect = host_overrides[logical_key]
+            root = f"{scheme}://{connect}:{port}".rstrip("/")
+            http_host = logical if port in (80, 443) else f"{logical}:{port}"
+            return root, http_host
         if not host or is_literal_ip(host):
             return base_url.rstrip("/"), None
         try:

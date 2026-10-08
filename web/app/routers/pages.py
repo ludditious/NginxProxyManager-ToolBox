@@ -35,13 +35,18 @@ from ..npm_backup_service import (
     delete_npm_backup,
     restore_npm_volumes,
 )
-from ..npm_address import build_api_url_from_form, parse_api_url
-from npmtbx.dns_resolve import parse_dns_server_list
+from ..npm_address import build_api_url_from_form, parse_api_url, validate_host
+from npmtbx.dns_resolve import (
+    format_host_override_map,
+    parse_dns_server_list,
+    parse_host_override_map,
+)
 
 from ..npm_bridge import (
     apply_candidate_to_master,
     apply_candidate_to_slave,
     npm_dns_servers_for_user,
+    npm_host_overrides_for_user,
     store_secret,
     test_npm_connection,
 )
@@ -224,6 +229,12 @@ def master_test(
         )
     except ValueError as e:
         return RedirectResponse(f"/master?err={quote(str(e))}", status_code=303)
+    admin_host: str | None = None
+    try:
+        if (npm_host or "").strip():
+            admin_host = validate_host(npm_host)
+    except ValueError:
+        admin_host = None
     res = test_npm_connection(
         api_url=api_url,
         identity=identity,
@@ -231,6 +242,8 @@ def master_test(
         form_secret=npm_password or None,
         verify_tls=verify_tls == "on",
         dns_servers=npm_dns_servers_for_user(user),
+        host_overrides=npm_host_overrides_for_user(user),
+        admin_host=admin_host,
     )
     key = "msg" if res.ok else "err"
     return RedirectResponse(f"/master?{key}={quote(res.message)}", status_code=303)
@@ -663,6 +676,8 @@ def settings_page(
             include_volumes=npm_settings.include_volumes if npm_settings else True,
             dns_use_custom=dns_settings.use_custom_dns if dns_settings else False,
             dns_servers=dns_settings.dns_servers if dns_settings else "",
+            host_overrides_enabled=dns_settings.use_host_overrides if dns_settings else False,
+            host_overrides_text=dns_settings.host_overrides if dns_settings else "",
             backup_retention_options=BACKUP_RETENTION_OPTIONS,
             ingest_secret=settings.ingest_secret,
             smtp=smtp,
@@ -731,6 +746,35 @@ def settings_dns(
         row.dns_servers = text
     db.commit()
     return RedirectResponse("/settings?msg=DNS%20settings%20saved", status_code=303)
+
+
+@router.post("/settings/host-overrides")
+def settings_host_overrides(
+    user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+    use_host_overrides: str | None = Form(None),
+    host_overrides: str = Form(""),
+):
+    ensure_user_defaults(db, user)
+    row = user.npm_dns_settings
+    assert row is not None
+    row.use_host_overrides = use_host_overrides == "on"
+    text = host_overrides.strip()
+    if row.use_host_overrides:
+        try:
+            mapping = parse_host_override_map(text)
+        except ValueError as e:
+            return RedirectResponse(f"/settings?err={quote(str(e))}", status_code=303)
+        if not mapping:
+            return RedirectResponse(
+                "/settings?err=Add%20at%20least%20one%20hostname%20override%20line",
+                status_code=303,
+            )
+        row.host_overrides = format_host_override_map(mapping)
+    elif text:
+        row.host_overrides = text
+    db.commit()
+    return RedirectResponse("/settings?msg=Host%20override%20settings%20saved", status_code=303)
 
 
 @router.post("/settings/automated-backup")

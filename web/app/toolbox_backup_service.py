@@ -99,6 +99,10 @@ def build_toolbox_document(user: User) -> dict[str, Any]:
         "dns_settings": {
             "use_custom_dns": bool(user.npm_dns_settings and user.npm_dns_settings.use_custom_dns),
             "dns_servers": user.npm_dns_settings.dns_servers if user.npm_dns_settings else "",
+            "use_host_overrides": bool(
+                user.npm_dns_settings and user.npm_dns_settings.use_host_overrides
+            ),
+            "host_overrides": user.npm_dns_settings.host_overrides if user.npm_dns_settings else "",
         },
     }
 
@@ -162,6 +166,8 @@ def restore_toolbox_backup(db: Session, user: User, backup_id: int) -> None:
         dd = doc["dns_settings"]
         dns.use_custom_dns = bool(dd.get("use_custom_dns"))
         dns.dns_servers = str(dd.get("dns_servers") or "")
+        dns.use_host_overrides = bool(dd.get("use_host_overrides"))
+        dns.host_overrides = str(dd.get("host_overrides") or "")
     db.commit()
     clear_settings_cache()
 

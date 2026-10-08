@@ -169,6 +169,8 @@ class NpmDnsSettings(Base):
     user_id: Mapped[int] = mapped_column(ForeignKey("users.id"), unique=True)
     use_custom_dns: Mapped[bool] = mapped_column(Boolean, default=False)
     dns_servers: Mapped[str] = mapped_column(String(512), default="")
+    use_host_overrides: Mapped[bool] = mapped_column(Boolean, default=False)
+    host_overrides: Mapped[str] = mapped_column(Text, default="")
 
     user: Mapped[User] = relationship(back_populates="npm_dns_settings")
 

@@ -8,7 +8,11 @@ from urllib.parse import urlparse
 
 import requests
 from npmtbx.client import NpmClient, NpmError
-from npmtbx.dns_resolve import is_literal_ip, parse_dns_server_list
+from npmtbx.dns_resolve import (
+    is_literal_ip,
+    parse_dns_server_list,
+    parse_host_override_map,
+)
 
 from .config import get_settings
 from .crypto import decrypt, encrypt
@@ -44,6 +48,22 @@ def npm_dns_servers_for_user(user) -> list[str] | None:
     return servers or None
 
 
+def npm_host_overrides_for_user(user) -> dict[str, str] | None:
+    row = getattr(user, "npm_dns_settings", None)
+    if not row or not row.use_host_overrides:
+        return None
+    mapping = parse_host_override_map(row.host_overrides)
+    return mapping or None
+
+
+def npm_admin_host_for_master(master: MasterInstance) -> str | None:
+    ah = (master.admin_host or "").strip()
+    if ah:
+        return ah
+    parsed = urlparse(NpmClient.normalize_api_url(master.api_url))
+    return (parsed.hostname or "").strip() or None
+
+
 def _connection_error_message(api_url: str, exc: Exception, *, verify_tls: bool) -> str:
     parsed = urlparse(NpmClient.normalize_api_url(api_url))
     host = parsed.hostname or ""
@@ -73,8 +93,8 @@ def _connection_error_message(api_url: str, exc: Exception, *, verify_tls: bool)
     if _is_dns_failure(exc, host):
         lines.append(f"The ToolBox could not resolve the hostname “{host}”.")
         lines.append(
-            "Enable Settings → DNS and add your LAN DNS IP (Pi-hole, router, AdGuard Home, etc.), "
-            "or use an IP address in NPM host with Connect via for Docker reachability."
+            "Try Settings → DNS for a LAN resolver, or Settings → Host overrides to map the NPM hostname "
+            "to an address the container can reach (with the original Host header)."
         )
         lines.append(
             "Public proxy hostnames are often not the NPM admin API — use the admin host/IP and port you use in a browser."
@@ -141,6 +161,7 @@ def npm_client_from_master(
     *,
     secret: str | None = None,
     dns_servers: list[str] | None = None,
+    host_overrides: dict[str, str] | None = None,
 ) -> NpmClient:
     pw, err = resolve_secret(master.password_enc, secret)
     if err or not pw:
@@ -154,6 +175,8 @@ def npm_client_from_master(
             secret=pw,
             verify_tls=master.verify_tls,
             dns_servers=dns_servers,
+            host_overrides=host_overrides,
+            admin_host=npm_admin_host_for_master(master),
         )
         client.login()
     except OSError as e:
@@ -171,6 +194,8 @@ def test_npm_connection(
     form_secret: str | None,
     verify_tls: bool,
     dns_servers: list[str] | None = None,
+    host_overrides: dict[str, str] | None = None,
+    admin_host: str | None = None,
 ) -> TestResult:
     pw, err = resolve_secret(password_enc, form_secret)
     if err or not pw:
@@ -180,7 +205,13 @@ def test_npm_connection(
         return TestResult(False, "Connection test", "API URL is required.")
     try:
         client = NpmClient(
-            url, identity=identity, secret=pw, verify_tls=verify_tls, dns_servers=dns_servers
+            url,
+            identity=identity,
+            secret=pw,
+            verify_tls=verify_tls,
+            dns_servers=dns_servers,
+            host_overrides=host_overrides,
+            admin_host=admin_host,
         )
         client.login()
         client.export_configuration()

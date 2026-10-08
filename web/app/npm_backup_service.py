@@ -15,7 +15,11 @@ from npmtbx.snapshot import create_snapshot_zip, extract_volume_member
 
 from .config import get_settings
 from .models import MasterInstance, NpmBackup, User, utcnow
-from .npm_bridge import npm_client_from_master, npm_dns_servers_for_user
+from .npm_bridge import (
+    npm_client_from_master,
+    npm_dns_servers_for_user,
+    npm_host_overrides_for_user,
+)
 
 
 def _host_label(url: str) -> str:
@@ -49,7 +53,11 @@ def create_npm_backup(
     master = user.master
     if not master or not master.enabled:
         raise ValueError("Master NPM instance is disabled or not configured.")
-    client = npm_client_from_master(master, dns_servers=npm_dns_servers_for_user(user))
+    client = npm_client_from_master(
+        master,
+        dns_servers=npm_dns_servers_for_user(user),
+        host_overrides=npm_host_overrides_for_user(user),
+    )
     api_export = client.export_configuration() if include_api else {}
     name = backup_display_name(master.api_url)
     zip_path = backup_zip_path(name)

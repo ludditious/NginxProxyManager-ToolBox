@@ -51,6 +51,17 @@
 </section>
 
 <section class="card">
+  <h2 class="footer-heading">Host overrides</h2>
+  <p class="muted small">Use when the NPM hostname on the Master page does not resolve inside Docker, or DNS returns a LAN IP the container cannot reach. Map that hostname to an address the container <em>can</em> open (for example <code>host.docker.internal</code>, the Docker gateway, or the NPM container name). The ToolBox connects to the mapped address but sends an HTTP <code>Host</code> header with your original NPM hostname so the admin API still matches what you configured.</p>
+  <form method="post" action="/settings/host-overrides">
+    <label class="check"><input type="checkbox" name="use_host_overrides" {% if host_overrides_enabled %}checked{% endif %}> Enable hostname overrides for NPM connections</label>
+    <label>Overrides<textarea name="host_overrides" rows="5" placeholder="npm.lan host.docker.internal&#10;proxy.ourstuff.uk 172.17.0.1" autocomplete="off">{{ host_overrides_text }}</textarea></label>
+    <p class="muted small">One line per mapping: NPM hostname, then connect address (separated by space, tab, or <code>=</code>). Lines starting with <code>#</code> are ignored. Disabled when the checkbox is off.</p>
+    <button type="submit">Save host overrides</button>
+  </form>
+</section>
+
+<section class="card">
   <h2 class="footer-heading">Email notifications</h2>
   <form method="post" action="/settings/smtp">
     <label class="check"><input type="checkbox" name="smtp_enabled" {% if smtp and smtp.enabled %}checked{% endif %}> Enable SMTP relay</label>
