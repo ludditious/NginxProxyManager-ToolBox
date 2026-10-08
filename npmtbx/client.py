@@ -8,6 +8,8 @@ from urllib.parse import urljoin, urlparse
 
 import requests
 
+from .dns_resolve import is_literal_ip, resolve_hostname
+
 
 class NpmError(Exception):
     pass
@@ -35,6 +37,7 @@ class NpmClient:
         secret: str,
         verify_tls: bool = False,
         timeout: int = 120,
+        dns_servers: list[str] | None = None,
     ) -> None:
         self.base_url = self.normalize_api_url(base_url)
         self.identity = identity.strip()
@@ -44,18 +47,43 @@ class NpmClient:
         self._token: str | None = None
         self._session = requests.Session()
         self._session.headers.update({"User-Agent": "NginxProxyManager-ToolBox/1.0"})
+        self._request_root, self._http_host = self._connection_target(self.base_url, dns_servers)
 
     def _request_verify(self) -> bool:
         """Only validate certificates when the user explicitly enabled Verify TLS."""
         return self.verify_tls
 
+    @staticmethod
+    def _connection_target(
+        base_url: str, dns_servers: list[str] | None
+    ) -> tuple[str, str | None]:
+        parsed = urlparse(base_url)
+        host = parsed.hostname or ""
+        scheme = parsed.scheme or "http"
+        port = parsed.port or (443 if scheme == "https" else 80)
+        if not host or is_literal_ip(host):
+            return base_url.rstrip("/"), None
+        try:
+            ip = resolve_hostname(host, dns_servers=dns_servers)
+        except (OSError, ValueError, RuntimeError) as e:
+            raise OSError(str(e)) from e
+        root = f"{scheme}://{ip}:{port}".rstrip("/")
+        http_host = host if port in (80, 443) else f"{host}:{port}"
+        return root, http_host
+
+    def _extra_headers(self) -> dict[str, str]:
+        if not self._http_host:
+            return {}
+        return {"Host": self._http_host}
+
     def login(self) -> None:
-        url = urljoin(self.base_url + "/", "api/tokens")
+        url = urljoin(self._request_root + "/", "api/tokens")
         resp = self._session.post(
             url,
             json={"identity": self.identity, "secret": self.secret},
             timeout=self.timeout,
             verify=self._request_verify(),
+            headers=self._extra_headers(),
         )
         if resp.status_code >= 400:
             raise NpmError(f"Authentication failed ({resp.status_code}): {resp.text[:500]}")
@@ -69,25 +97,27 @@ class NpmClient:
     def _get_json(self, path: str) -> Any:
         if not self._token:
             self.login()
-        url = urljoin(self.base_url + "/", path.lstrip("/"))
-        resp = self._session.get(url, timeout=self.timeout, verify=self._request_verify())
+        url = urljoin(self._request_root + "/", path.lstrip("/"))
+        hdrs = self._extra_headers()
+        resp = self._session.get(url, timeout=self.timeout, verify=self._request_verify(), headers=hdrs)
         if resp.status_code == 401:
             self._token = None
             self.login()
-            resp = self._session.get(url, timeout=self.timeout, verify=self._request_verify())
+            resp = self._session.get(url, timeout=self.timeout, verify=self._request_verify(), headers=hdrs)
         if resp.status_code >= 400:
             raise NpmError(f"GET {path} failed ({resp.status_code}): {resp.text[:500]}")
         return resp.json()
 
     def probe_api(self) -> bool:
         """Return True if this host looks like NPM (tokens endpoint exists)."""
-        url = urljoin(self.base_url + "/", "api/tokens")
+        url = urljoin(self._request_root + "/", "api/tokens")
         try:
             resp = self._session.post(
                 url,
                 json={"identity": "__probe__", "secret": "__probe__"},
                 timeout=min(15, self.timeout),
                 verify=self._request_verify(),
+                headers=self._extra_headers(),
             )
         except requests.RequestException:
             return False

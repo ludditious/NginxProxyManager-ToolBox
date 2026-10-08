@@ -40,6 +40,17 @@
 </section>
 
 <section class="card">
+  <h2 class="footer-heading">DNS</h2>
+  <p class="muted small">By default the container uses its normal resolver (Docker / host). Enable custom DNS when NPM hostnames only resolve on your LAN (Pi-hole, router, AdGuard Home, etc.).</p>
+  <form method="post" action="/settings/dns">
+    <label class="check"><input type="checkbox" name="use_custom_dns" {% if dns_use_custom %}checked{% endif %}> Use custom LAN DNS for NPM connections</label>
+    <label>DNS server IP(s)<input type="text" name="dns_servers" value="{{ dns_servers }}" placeholder="192.168.1.1" autocomplete="off"></label>
+    <p class="muted small">Comma-separated IPv4 addresses. Ignored when custom DNS is off.</p>
+    <button type="submit">Save DNS settings</button>
+  </form>
+</section>
+
+<section class="card">
   <h2 class="footer-heading">Email notifications</h2>
   <form method="post" action="/settings/smtp">
     <label class="check"><input type="checkbox" name="smtp_enabled" {% if smtp and smtp.enabled %}checked{% endif %}> Enable SMTP relay</label>

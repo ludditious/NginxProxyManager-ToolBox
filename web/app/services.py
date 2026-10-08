@@ -21,6 +21,7 @@ from .models import (
     NotificationPrefs,
     NpmBackup,
     NpmBackupSettings,
+    NpmDnsSettings,
     SmtpSettings,
     User,
     utcnow,
@@ -105,6 +106,8 @@ def ensure_user_defaults(db: Session, user: User) -> None:
         db.add(BackupSchedule(user_id=user.id))
     if not user.npm_backup_settings:
         db.add(NpmBackupSettings(user_id=user.id))
+    if not user.npm_dns_settings:
+        db.add(NpmDnsSettings(user_id=user.id))
     if not user.smtp_settings:
         db.add(SmtpSettings(user_id=user.id))
     if not user.notification_prefs:

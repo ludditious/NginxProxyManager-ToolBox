@@ -36,9 +36,12 @@ from ..npm_backup_service import (
     restore_npm_volumes,
 )
 from ..npm_address import build_api_url_from_form, parse_api_url
+from npmtbx.dns_resolve import parse_dns_server_list
+
 from ..npm_bridge import (
     apply_candidate_to_master,
     apply_candidate_to_slave,
+    npm_dns_servers_for_user,
     store_secret,
     test_npm_connection,
 )
@@ -227,6 +230,7 @@ def master_test(
         password_enc=master.password_enc,
         form_secret=npm_password or None,
         verify_tls=verify_tls == "on",
+        dns_servers=npm_dns_servers_for_user(user),
     )
     key = "msg" if res.ok else "err"
     return RedirectResponse(f"/master?{key}={quote(res.message)}", status_code=303)
@@ -637,6 +641,7 @@ def settings_page(
     sk = get_settings().secret_key
     settings = get_settings()
     npm_settings = user.npm_backup_settings
+    dns_settings = user.npm_dns_settings
     smtp = user.smtp_settings
     prefs = user.notification_prefs
     return templates.TemplateResponse(
@@ -656,6 +661,8 @@ def settings_page(
             auto_backup_retention_days=npm_settings.retention_days if npm_settings else 30,
             include_api=npm_settings.include_api if npm_settings else True,
             include_volumes=npm_settings.include_volumes if npm_settings else True,
+            dns_use_custom=dns_settings.use_custom_dns if dns_settings else False,
+            dns_servers=dns_settings.dns_servers if dns_settings else "",
             backup_retention_options=BACKUP_RETENTION_OPTIONS,
             ingest_secret=settings.ingest_secret,
             smtp=smtp,
@@ -695,6 +702,35 @@ def settings_recovery(
     except ValueError as e:
         return RedirectResponse(f"/settings?err={quote(str(e))}", status_code=303)
     return RedirectResponse("/settings?msg=Recovery%20saved", status_code=303)
+
+
+@router.post("/settings/dns")
+def settings_dns(
+    user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+    use_custom_dns: str | None = Form(None),
+    dns_servers: str = Form(""),
+):
+    ensure_user_defaults(db, user)
+    row = user.npm_dns_settings
+    assert row is not None
+    row.use_custom_dns = use_custom_dns == "on"
+    text = dns_servers.strip()
+    if row.use_custom_dns:
+        try:
+            servers = parse_dns_server_list(text)
+        except ValueError as e:
+            return RedirectResponse(f"/settings?err={quote(str(e))}", status_code=303)
+        if not servers:
+            return RedirectResponse(
+                "/settings?err=Enter%20at%20least%20one%20DNS%20server%20IP",
+                status_code=303,
+            )
+        row.dns_servers = ", ".join(servers)
+    elif text:
+        row.dns_servers = text
+    db.commit()
+    return RedirectResponse("/settings?msg=DNS%20settings%20saved", status_code=303)
 
 
 @router.post("/settings/automated-backup")

@@ -46,6 +46,9 @@ class User(Base):
     remote_destinations: Mapped[list[RemoteToolBox]] = relationship(back_populates="user")
     remote_sources: Mapped[list[RemotePullSource]] = relationship(back_populates="user")
     smtp_settings: Mapped[SmtpSettings | None] = relationship(back_populates="user", uselist=False)
+    npm_dns_settings: Mapped[NpmDnsSettings | None] = relationship(
+        back_populates="user", uselist=False
+    )
     notification_prefs: Mapped[NotificationPrefs | None] = relationship(
         back_populates="user", uselist=False
     )
@@ -155,6 +158,19 @@ class BackupSchedule(Base):
     def set_days(self, days: set[str]) -> None:
         ordered = [d for d in DAY_KEYS if d in days]
         self.days_json = json.dumps(ordered)
+
+
+class NpmDnsSettings(Base):
+    """Optional LAN DNS resolvers for NPM hostname lookups from the ToolBox container."""
+
+    __tablename__ = "npm_dns_settings"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    user_id: Mapped[int] = mapped_column(ForeignKey("users.id"), unique=True)
+    use_custom_dns: Mapped[bool] = mapped_column(Boolean, default=False)
+    dns_servers: Mapped[str] = mapped_column(String(512), default="")
+
+    user: Mapped[User] = relationship(back_populates="npm_dns_settings")
 
 
 class NpmBackupSettings(Base):

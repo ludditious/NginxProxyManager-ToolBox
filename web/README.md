@@ -27,6 +27,6 @@ Container name: **`NginxProxyManager-ToolBox`**
 | `CRON_SECRET` | Internal cron tick auth |
 | `INGEST_SECRET` | Remote snapshot ingest auth |
 | `PORT` / host publish mapping | Web UI port (your choice on the host) |
-| `CUSTOM_DNS` | Comma-separated DNS servers (e.g. LAN resolver) so NPM hostnames resolve inside the container |
+| `CUSTOM_DNS` | Optional container-wide DNS (comma-separated IPs). You can also set LAN DNS under **Settings → DNS** in the UI without recreating the container |
 
 *Revised: 2026-10-08*

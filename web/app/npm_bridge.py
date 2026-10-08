@@ -8,6 +8,7 @@ from urllib.parse import urlparse
 
 import requests
 from npmtbx.client import NpmClient, NpmError
+from npmtbx.dns_resolve import is_literal_ip, parse_dns_server_list
 
 from .config import get_settings
 from .crypto import decrypt, encrypt
@@ -21,7 +22,9 @@ class TestResult:
     message: str
 
 
-def _is_dns_failure(exc: BaseException) -> bool:
+def _is_dns_failure(exc: BaseException, host: str) -> bool:
+    if is_literal_ip(host):
+        return False
     text = str(exc).lower()
     if "failed to resolve" in text or "no address associated with hostname" in text:
         return True
@@ -29,8 +32,16 @@ def _is_dns_failure(exc: BaseException) -> bool:
         return True
     cause = getattr(exc, "__cause__", None)
     if cause is not None and cause is not exc:
-        return _is_dns_failure(cause)
+        return _is_dns_failure(cause, host)
     return False
+
+
+def npm_dns_servers_for_user(user) -> list[str] | None:
+    row = getattr(user, "npm_dns_settings", None)
+    if not row or not row.use_custom_dns:
+        return None
+    servers = parse_dns_server_list(row.dns_servers)
+    return servers or None
 
 
 def _connection_error_message(api_url: str, exc: Exception, *, verify_tls: bool) -> str:
@@ -38,18 +49,35 @@ def _connection_error_message(api_url: str, exc: Exception, *, verify_tls: bool)
     host = parsed.hostname or ""
     lines: list[str] = []
 
-    if _is_dns_failure(exc):
-        lines.append(f"The ToolBox container could not resolve the hostname “{host}”.")
+    if is_literal_ip(host):
+        text = str(exc).lower()
+        port = parsed.port or (443 if parsed.scheme == "https" else 80)
         lines.append(
-            "Your PC may know that name (DNS, Pi-hole, or hosts file) but the container often does not."
+            f"Could not reach NPM at {host}:{port} from inside this ToolBox container."
         )
         lines.append(
-            "Use the same IP address you use for NPM on the LAN (for example 192.168.x.x) in the host field, "
-            "or set CUSTOM_DNS on the container to your LAN DNS resolver."
+            "That value is an IP address, not a DNS name — the failure is network reachability, not name lookup."
+        )
+        if "connection refused" in text or "econnrefused" in text:
+            lines.append(
+                "Nothing accepted a connection on that host and port. Confirm NPM admin/API listens there."
+            )
+        elif "timed out" in text or "timeout" in text:
+            lines.append("The connection timed out — check firewall and routing from Docker to that address.")
+        lines.append(
+            "On the same Docker host, try Connect via host.docker.internal, the host gateway, "
+            "or the NPM container name on a shared network instead of a LAN IP."
+        )
+        return " ".join(lines)
+
+    if _is_dns_failure(exc, host):
+        lines.append(f"The ToolBox could not resolve the hostname “{host}”.")
+        lines.append(
+            "Enable Settings → DNS and add your LAN DNS IP (Pi-hole, router, AdGuard Home, etc.), "
+            "or use an IP address in NPM host with Connect via for Docker reachability."
         )
         lines.append(
-            "If this name is your public proxy site (not the admin UI), use the admin host/IP instead — "
-            "the API path /api/tokens must be reachable on the host and port you select."
+            "Public proxy hostnames are often not the NPM admin API — use the admin host/IP and port you use in a browser."
         )
         return " ".join(lines)
 
@@ -108,19 +136,30 @@ def store_secret(form_secret: str | None, existing_enc: str) -> tuple[str, str]:
     return "", "missing"
 
 
-def npm_client_from_master(master: MasterInstance, *, secret: str | None = None) -> NpmClient:
+def npm_client_from_master(
+    master: MasterInstance,
+    *,
+    secret: str | None = None,
+    dns_servers: list[str] | None = None,
+) -> NpmClient:
     pw, err = resolve_secret(master.password_enc, secret)
     if err or not pw:
         raise ValueError(err or "Master password missing.")
     if not master.api_url.strip():
         raise ValueError("Master API URL is not configured.")
-    client = NpmClient(
-        master.api_url,
-        identity=master.identity,
-        secret=pw,
-        verify_tls=master.verify_tls,
-    )
-    client.login()
+    try:
+        client = NpmClient(
+            master.api_url,
+            identity=master.identity,
+            secret=pw,
+            verify_tls=master.verify_tls,
+            dns_servers=dns_servers,
+        )
+        client.login()
+    except OSError as e:
+        raise ValueError(
+            _connection_error_message(master.api_url, e, verify_tls=master.verify_tls)
+        ) from e
     return client
 
 
@@ -131,6 +170,7 @@ def test_npm_connection(
     password_enc: str,
     form_secret: str | None,
     verify_tls: bool,
+    dns_servers: list[str] | None = None,
 ) -> TestResult:
     pw, err = resolve_secret(password_enc, form_secret)
     if err or not pw:
@@ -139,9 +179,17 @@ def test_npm_connection(
     if not url:
         return TestResult(False, "Connection test", "API URL is required.")
     try:
-        client = NpmClient(url, identity=identity, secret=pw, verify_tls=verify_tls)
+        client = NpmClient(
+            url, identity=identity, secret=pw, verify_tls=verify_tls, dns_servers=dns_servers
+        )
         client.login()
         client.export_configuration()
+    except OSError as e:
+        return TestResult(
+            False,
+            "Connection test",
+            _connection_error_message(url, e, verify_tls=verify_tls),
+        )
     except NpmError as e:
         return TestResult(False, "Connection test", str(e))
     except (requests.exceptions.SSLError, requests.exceptions.ConnectionError) as e:

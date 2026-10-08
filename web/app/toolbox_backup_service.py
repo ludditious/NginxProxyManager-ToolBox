@@ -96,6 +96,10 @@ def build_toolbox_document(user: User) -> dict[str, Any]:
             "interval_minutes": user.schedule.interval_minutes if user.schedule else 1440,
             "days_json": user.schedule.days_json if user.schedule else "[]",
         },
+        "dns_settings": {
+            "use_custom_dns": bool(user.npm_dns_settings and user.npm_dns_settings.use_custom_dns),
+            "dns_servers": user.npm_dns_settings.dns_servers if user.npm_dns_settings else "",
+        },
     }
 
 
@@ -153,6 +157,11 @@ def restore_toolbox_backup(db: Session, user: User, backup_id: int) -> None:
         sched.enabled = bool(sd.get("enabled"))
         sched.interval_minutes = int(sd.get("interval_minutes") or 1440)
         sched.days_json = sd.get("days_json") or sched.days_json
+    dns = user.npm_dns_settings
+    if dns and doc.get("dns_settings"):
+        dd = doc["dns_settings"]
+        dns.use_custom_dns = bool(dd.get("use_custom_dns"))
+        dns.dns_servers = str(dd.get("dns_servers") or "")
     db.commit()
     clear_settings_cache()
 
