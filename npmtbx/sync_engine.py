@@ -35,6 +35,8 @@ _CREATE_ORDER = (
 
 _DELETE_ORDER = tuple(reversed(_CREATE_ORDER))
 
+_PROTECTED_USER_IDS = frozenset({1})
+
 
 def _clean_payload(obj: Any) -> Any:
     if isinstance(obj, dict):
@@ -64,8 +66,47 @@ def _delete_all(client: NpmClient, path: str) -> None:
     items = _as_list(client._get_json(path))
     for item in items:
         rid = item.get("id")
-        if rid is not None:
-            client._delete_json(f"{path.rstrip('/')}/{rid}")
+        if rid is None:
+            continue
+        if path.rstrip("/").endswith("/users") and int(rid) in _PROTECTED_USER_IDS:
+            continue
+        client._delete_json(f"{path.rstrip('/')}/{rid}")
+
+
+def _sync_users(client: NpmClient, items: list[dict[str, Any]]) -> tuple[int, int]:
+    """Upsert users by email. NPM forbids deleting the primary admin (id 1)."""
+    existing = _as_list(client._get_json("/api/users"))
+    by_email: dict[str, dict[str, Any]] = {}
+    for row in existing:
+        email = str(row.get("email") or "").strip().lower()
+        if email:
+            by_email[email] = row
+    updated = 0
+    created = 0
+    for item in items:
+        payload = _clean_payload(deepcopy(item))
+        email = str(payload.get("email") or "").strip().lower()
+        if not email:
+            continue
+        payload.pop("password", None)
+        payload.pop("secret", None)
+        match = by_email.get(email)
+        if match and match.get("id") is not None:
+            rid = int(match["id"])
+            if rid in _PROTECTED_USER_IDS:
+                continue
+            try:
+                client._put_json(f"/api/users/{rid}", payload)
+                updated += 1
+            except NpmError:
+                continue
+        else:
+            try:
+                client._post_json("/api/users", payload)
+                created += 1
+            except NpmError:
+                continue
+    return updated, created
 
 
 def _create_all(client: NpmClient, path: str, items: list[dict[str, Any]]) -> None:
@@ -91,11 +132,12 @@ def apply_export_to_target(export: dict[str, Any], target: NpmClient) -> list[st
     path_by_key = dict(_LIST_RESOURCES)
 
     for key in _DELETE_ORDER:
+        if key == "users":
+            continue
         path = path_by_key.get(key)
         if not path:
             continue
-        data = export.get(key)
-        if data is None:
+        if export.get(key) is None:
             continue
         _delete_all(target, path)
         lines.append(f"Cleared target {key}")
@@ -106,6 +148,10 @@ def apply_export_to_target(export: dict[str, Any], target: NpmClient) -> list[st
             continue
         items = _as_list(export.get(key))
         if not items:
+            continue
+        if key == "users":
+            upd, new = _sync_users(target, items)
+            lines.append(f"Synced users on target ({upd} updated, {new} created)")
             continue
         _create_all(target, path, items)
         lines.append(f"Applied {len(items)} {key} to target")
