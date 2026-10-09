@@ -18,7 +18,7 @@ _LIST_RESOURCES: tuple[tuple[str, str], ...] = (
     ("redirection-hosts", "/api/nginx/redirection-hosts"),
     ("dead-hosts", "/api/nginx/dead-hosts"),
     ("streams", "/api/nginx/streams"),
-    ("access-lists", "/api/access-lists"),
+    ("access-lists", "/api/nginx/access-lists"),
     ("certificates", "/api/nginx/certificates"),
     ("users", "/api/users"),
 )
@@ -60,6 +60,16 @@ def _as_list(data: Any) -> list[dict[str, Any]]:
         if "id" in data:
             return [data]
     return []
+
+
+def _export_section(export: dict[str, Any], key: str) -> Any | None:
+    """Return export payload for key, or None if missing / failed on source."""
+    raw = export.get(key)
+    if raw is None:
+        return None
+    if isinstance(raw, dict) and "_error" in raw:
+        return None
+    return raw
 
 
 def _delete_all(client: NpmClient, path: str) -> None:
@@ -137,7 +147,7 @@ def apply_export_to_target(export: dict[str, Any], target: NpmClient) -> list[st
         path = path_by_key.get(key)
         if not path:
             continue
-        if export.get(key) is None:
+        if _export_section(export, key) is None:
             continue
         _delete_all(target, path)
         lines.append(f"Cleared target {key}")
@@ -146,7 +156,10 @@ def apply_export_to_target(export: dict[str, Any], target: NpmClient) -> list[st
         path = path_by_key.get(key)
         if not path:
             continue
-        items = _as_list(export.get(key))
+        section = _export_section(export, key)
+        if section is None:
+            continue
+        items = _as_list(section)
         if not items:
             continue
         if key == "users":

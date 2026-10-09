@@ -25,7 +25,7 @@ class NpmClient:
         ("redirection-hosts", "/api/nginx/redirection-hosts"),
         ("dead-hosts", "/api/nginx/dead-hosts"),
         ("streams", "/api/nginx/streams"),
-        ("access-lists", "/api/access-lists"),
+        ("access-lists", "/api/nginx/access-lists"),
         ("certificates", "/api/nginx/certificates"),
         ("settings", "/api/settings"),
         ("users", "/api/users"),
@@ -209,7 +209,10 @@ class NpmClient:
         out: dict[str, Any] = {"api_base_url": self.base_url}
         for key, path in self._API_EXPORTS:
             try:
-                out[key] = self._get_json(path)
+                if key == "access-lists":
+                    out[key] = self._get_json(f"{path}?expand=clients")
+                else:
+                    out[key] = self._get_json(path)
             except NpmError as e:
                 out[key] = {"_error": str(e)}
         return out
