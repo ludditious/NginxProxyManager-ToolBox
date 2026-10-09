@@ -205,12 +205,35 @@ class NpmClient:
         ctype = (resp.headers.get("content-type") or "").lower()
         return "json" in ctype and resp.status_code < 500
 
+    def _export_certificates(self) -> list[Any]:
+        """List certificates, then GET each row so meta (email, DNS flags) is populated."""
+        data = self._get_json("/api/nginx/certificates")
+        if not isinstance(data, list):
+            return data if data is not None else []
+        detailed: list[Any] = []
+        for row in data:
+            if not isinstance(row, dict):
+                continue
+            cid = row.get("id")
+            if cid is None:
+                detailed.append(row)
+                continue
+            try:
+                detailed.append(
+                    self._get_json(f"/api/nginx/certificates/{int(cid)}")
+                )
+            except NpmError:
+                detailed.append(row)
+        return detailed
+
     def export_configuration(self) -> dict[str, Any]:
         out: dict[str, Any] = {"api_base_url": self.base_url}
         for key, path in self._API_EXPORTS:
             try:
                 if key == "access-lists":
                     out[key] = self._get_json(f"{path}?expand=clients")
+                elif key == "certificates":
+                    out[key] = self._export_certificates()
                 else:
                     out[key] = self._get_json(path)
             except NpmError as e:

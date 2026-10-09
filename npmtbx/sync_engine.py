@@ -220,6 +220,41 @@ def _certificate_meta_enrich_from_item(
     return meta
 
 
+def _cert_domain_key(item: dict[str, Any]) -> tuple[str, ...]:
+    domains = _normalize_domain_names(item.get("domain_names"))
+    if domains:
+        return tuple(sorted(domains))
+    label = str(item.get("nice_name") or item.get("name") or "").strip().lower()
+    return (label,) if label else ()
+
+
+def _meta_text(value: Any) -> str | None:
+    if value is True or value is False or value is None:
+        return None
+    text = str(value).strip()
+    return text if text else None
+
+
+def _letsencrypt_create_allowed(meta: dict[str, Any]) -> tuple[bool, str]:
+    """
+    NPM POST for letsencrypt runs ACME immediately; DNS challenge needs credentials
+    on disk — the API never exports dns_provider_credentials (often redacted to true).
+    """
+    if meta.get("dns_challenge"):
+        if not _meta_text(meta.get("dns_provider")):
+            return False, "DNS provider name missing (NPM API export)"
+        creds = meta.get("dns_provider_credentials")
+        if creds is True or not _meta_text(creds):
+            return (
+                False,
+                "DNS credentials are not available from the NPM API — recreate this "
+                "certificate on the target or copy /etc/letsencrypt via Backup/Restore",
+            )
+    if not _meta_text(meta.get("letsencrypt_email")):
+        return False, "Let's Encrypt contact email missing from certificate export"
+    return True, ""
+
+
 def _npm_openapi_certificate_payload(item: dict[str, Any]) -> dict[str, Any]:
     """
     POST /api/nginx/certificates (OpenAPI): only provider, nice_name, domain_names, meta.
@@ -245,15 +280,86 @@ def _npm_openapi_certificate_payload(item: dict[str, Any]) -> dict[str, Any]:
     return payload
 
 
-def _create_certificates(client: NpmClient, items: list[dict[str, Any]]) -> None:
+def _remap_certificate_id(
+    payload: dict[str, Any], certificate_id_map: dict[int, int]
+) -> None:
+    cid = payload.get("certificate_id")
+    if cid in (None, "", 0, "0"):
+        return
+    try:
+        old_id = int(cid)
+    except (TypeError, ValueError):
+        return
+    if old_id <= 0:
+        return
+    new_id = certificate_id_map.get(old_id)
+    payload["certificate_id"] = new_id if new_id is not None else 0
+
+
+def _sync_certificates(
+    client: NpmClient,
+    items: list[dict[str, Any]],
+    lines: list[str],
+) -> dict[int, int]:
+    """Create or preserve certificates; map source cert id → target cert id."""
+    target_by_domains: dict[tuple[str, ...], dict[str, Any]] = {}
+    for row in _as_list(client._get_json("/api/nginx/certificates")):
+        key = _cert_domain_key(row)
+        if key:
+            target_by_domains[key] = row
+
+    id_map: dict[int, int] = {}
+    created = 0
+    skipped = 0
     for item in items:
+        source_id = item.get("id")
+        try:
+            source_id_int = int(source_id) if source_id is not None else None
+        except (TypeError, ValueError):
+            source_id_int = None
+        domain_key = _cert_domain_key(item)
+        label = item.get("nice_name") or item.get("name") or ",".join(domain_key) or "?"
         payload = _npm_openapi_certificate_payload(item)
-        client._post_json("/api/nginx/certificates", payload)
+        meta = payload.get("meta") if isinstance(payload.get("meta"), dict) else {}
+
+        if payload.get("provider") == "letsencrypt":
+            ok, reason = _letsencrypt_create_allowed(meta)
+            if not ok:
+                skipped += 1
+                existing = target_by_domains.get(domain_key) if domain_key else None
+                if existing and existing.get("id") is not None and source_id_int:
+                    id_map[source_id_int] = int(existing["id"])
+                lines.append(f"Skipped certificate {label}: {reason}")
+                continue
+
+        existing = target_by_domains.get(domain_key) if domain_key else None
+        if existing and existing.get("id") is not None:
+            client._delete_json(f"/api/nginx/certificates/{int(existing['id'])}")
+
+        created_row = client._post_json("/api/nginx/certificates", payload)
+        created += 1
+        if isinstance(created_row, dict) and created_row.get("id") is not None:
+            target_by_domains[domain_key] = created_row
+            if source_id_int is not None:
+                id_map[source_id_int] = int(created_row["id"])
+
+    lines.append(
+        f"Certificates on target: {created} requested via API, {skipped} skipped (see log)"
+    )
+    return id_map
 
 
-def _create_all(client: NpmClient, path: str, items: list[dict[str, Any]]) -> None:
+def _create_all(
+    client: NpmClient,
+    path: str,
+    items: list[dict[str, Any]],
+    *,
+    certificate_id_map: dict[int, int] | None = None,
+) -> None:
     for item in items:
         payload = _clean_payload(deepcopy(item))
+        if certificate_id_map:
+            _remap_certificate_id(payload, certificate_id_map)
         if payload:
             client._post_json(path, payload)
 
@@ -273,8 +379,10 @@ def apply_export_to_target(export: dict[str, Any], target: NpmClient) -> list[st
     lines: list[str] = []
     path_by_key = dict(_LIST_RESOURCES)
 
+    certificate_id_map: dict[int, int] = {}
+
     for key in _DELETE_ORDER:
-        if key == "users":
+        if key in ("users", "certificates"):
             continue
         path = path_by_key.get(key)
         if not path:
@@ -299,9 +407,9 @@ def apply_export_to_target(export: dict[str, Any], target: NpmClient) -> list[st
             lines.append(f"Synced users on target ({upd} updated, {new} created)")
             continue
         if key == "certificates":
-            _create_certificates(target, items)
-        else:
-            _create_all(target, path, items)
+            certificate_id_map = _sync_certificates(target, items, lines)
+            continue
+        _create_all(target, path, items, certificate_id_map=certificate_id_map)
         lines.append(f"Applied {len(items)} {key} to target")
 
     if "settings" in export:
