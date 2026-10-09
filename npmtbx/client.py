@@ -278,22 +278,39 @@ class NpmClient:
         self._request_json("DELETE", path)
 
     @staticmethod
-    def _material_from_zip(data: bytes) -> CertificateUploadMaterial | None:
+    def _is_private_key_pem(text: str) -> bool:
+        return "BEGIN" in text and "PRIVATE KEY" in text
+
+    @staticmethod
+    def _is_certificate_pem(text: str) -> bool:
+        return "BEGIN CERTIFICATE" in text
+
+    @classmethod
+    def _material_from_zip(cls, data: bytes) -> CertificateUploadMaterial | None:
         if not data or not data.startswith(b"PK"):
             return None
         try:
             with zipfile.ZipFile(io.BytesIO(data)) as zf:
                 by_name: dict[str, str] = {}
+                private_keys: list[str] = []
+                certificates: list[str] = []
                 for name in zf.namelist():
                     if name.endswith("/"):
                         continue
-                    base = PurePosixPath(name).name.lower()
-                    if not base.endswith(".pem"):
+                    raw = zf.read(name)
+                    if not raw:
                         continue
-                    text = zf.read(name).decode("utf-8", errors="replace").strip()
-                    if "BEGIN" in text:
+                    text = raw.decode("utf-8", errors="replace").strip()
+                    if not text:
+                        continue
+                    base = PurePosixPath(name).name.lower()
+                    if base:
                         by_name[base] = text
-                key = by_name.get("privkey.pem")
+                    if cls._is_private_key_pem(text):
+                        private_keys.append(text)
+                    elif cls._is_certificate_pem(text):
+                        certificates.append(text)
+                key = by_name.get("privkey.pem") or (private_keys[0] if private_keys else None)
                 if not key:
                     return None
                 chain = by_name.get("fullchain.pem")
@@ -301,15 +318,23 @@ class NpmClient:
                 cert_only = by_name.get("cert.pem")
                 if chain:
                     cert_body = chain
-                    inter = intermediate if intermediate and intermediate not in chain else None
+                    inter = (
+                        intermediate
+                        if intermediate and intermediate not in chain
+                        else None
+                    )
                 elif cert_only:
                     cert_body = cert_only
                     inter = intermediate
-                    if inter:
-                        cert_body = cert_only
+                elif certificates:
+                    cert_body = "\n".join(certificates)
+                    inter = None
+                    if len(certificates) > 1:
+                        cert_body = certificates[0]
+                        inter = "\n".join(certificates[1:])
                 else:
                     return None
-                if "BEGIN CERTIFICATE" not in cert_body:
+                if not cls._is_certificate_pem(cert_body):
                     return None
                 return CertificateUploadMaterial(
                     certificate_pem=cert_body,
@@ -318,6 +343,22 @@ class NpmClient:
                 )
         except (zipfile.BadZipFile, OSError, KeyError):
             return None
+
+    @staticmethod
+    def _zip_entry_summary(data: bytes) -> str:
+        if not data.startswith(b"PK"):
+            return "not a zip file"
+        try:
+            with zipfile.ZipFile(io.BytesIO(data)) as zf:
+                parts: list[str] = []
+                for name in zf.namelist():
+                    if name.endswith("/"):
+                        continue
+                    info = zf.getinfo(name)
+                    parts.append(f"{name} ({info.file_size} bytes)")
+                return ", ".join(parts) if parts else "empty zip"
+        except zipfile.BadZipFile:
+            return "invalid zip"
 
     def download_certificate_materials(
         self, cert_id: int
@@ -361,9 +402,10 @@ class NpmClient:
         ctype = resp.headers.get("content-type", "")
         if content[:1] == b"{":
             return None, f"download returned JSON not zip: {content[:300]!r}"
+        entries = self._zip_entry_summary(content)
         return None, (
-            f"download returned unexpected data (content-type={ctype!r}, "
-            f"{len(content)} bytes, zip PEMs missing)"
+            f"download zip could not be parsed (content-type={ctype!r}, "
+            f"{len(content)} bytes; entries: {entries})"
         )
 
     def download_letsencrypt_pem(self, cert_id: int) -> tuple[str, str] | None:
