@@ -1,8 +1,9 @@
 {% extends "base.html" %}
-{% block title %} - Slaves{% endblock %}
+{% block title %} - Targets{% endblock %}
 {% block content %}
 <div class="page-form-layout">
-<h1>Slave NPM instances</h1>
+<h1>Target NPM instances</h1>
+<p class="muted small">Link additional NPM installs (DR copies, other sites). Each target uses the same connection layout as <a href="/master">Source</a>. Save one target, then use <strong>Add another target</strong> for the next.</p>
 {% if request.query_params.get('msg') %}<p class="notice notice-ok">{{ request.query_params.get('msg') }}</p>{% endif %}
 {% if request.query_params.get('err') %}<p class="notice notice-err">{{ request.query_params.get('err') }}</p>{% endif %}
 
@@ -10,32 +11,32 @@
 {% set s = row.slave %}
 <form method="post" action="/slaves/save" class="card">
   <input type="hidden" name="slave_id" value="{{ s.id }}">
-  <h2>{{ s.name or ('Slave ' ~ s.id) }}</h2>
-  <label>Name<input type="text" name="name" value="{{ s.name }}"></label>
-  {% with npm_host=row.npm_host, connect_host=row.connect_host, port_preset=row.port_preset, npm_port_custom=row.npm_port_custom %}
-  {% include "_npm_host_port.html" %}
+  <h2 class="footer-heading">{{ s.name or ('Target ' ~ s.id) }}</h2>
+  <h3 class="footer-heading">Connection</h3>
+  {% with show_name_field=true, require_name=false, name=s.name, npm_host=row.npm_host, connect_host=row.connect_host, port_preset=row.port_preset, npm_port_custom=row.npm_port_custom, identity=s.identity, data_path=s.data_path, letsencrypt_path=s.letsencrypt_path, public_endpoint=s.public_endpoint, link_group=s.link_group, verify_tls=s.verify_tls, enabled=s.enabled, show_auto_pull=true, auto_pull=s.auto_pull %}
+  {% include "_npm_instance_form_fields.html" %}
   {% endwith %}
-  <label>Identity<input type="email" name="identity" value="{{ s.identity }}"></label>
-  <label>Data path<input type="text" name="data_path" value="{{ s.data_path }}"></label>
-  <label>Letsencrypt path<input type="text" name="letsencrypt_path" value="{{ s.letsencrypt_path }}"></label>
-  <label>Public endpoint<input type="text" name="public_endpoint" value="{{ s.public_endpoint }}"></label>
-  <label>Link group<input type="text" name="link_group" value="{{ s.link_group }}"></label>
-  <label class="check"><input type="checkbox" name="enabled" {% if s.enabled %}checked{% endif %}> Enabled</label>
-  <label class="check"><input type="checkbox" name="auto_pull" {% if s.auto_pull %}checked{% endif %}> Auto pull (future schedule hook)</label>
-  <button type="submit">Save</button>
+  <div class="row-actions">
+    <button type="submit">Save target</button>
+    <button type="submit" formaction="/slaves/test" formmethod="post">Test connection</button>
+  </div>
+</form>
+<form method="post" action="/slaves/delete" class="card card-compact" onsubmit="return confirm('Remove this target?');">
+  <input type="hidden" name="slave_id" value="{{ s.id }}">
+  <button type="submit" class="danger">Remove target</button>
 </form>
 {% endfor %}
 
 <form method="post" action="/slaves/save" class="card">
-  <h2>Add slave</h2>
-  <label>Name<input type="text" name="name" required></label>
-  {% with npm_host='', connect_host='', port_preset='80', npm_port_custom='' %}
-  {% include "_npm_host_port.html" %}
+  <h2 class="footer-heading">Add another target</h2>
+  <h3 class="footer-heading">Connection</h3>
+  {% with show_name_field=true, require_name=true, name='', npm_host='', connect_host='', port_preset='80', npm_port_custom='', identity='', data_path='', letsencrypt_path='', public_endpoint='', link_group='default', verify_tls=false, enabled=true, show_auto_pull=true, auto_pull=false %}
+  {% include "_npm_instance_form_fields.html" %}
   {% endwith %}
-  <label>Identity<input type="email" name="identity"></label>
-  <label>Data path<input type="text" name="data_path"></label>
-  <label>Letsencrypt path<input type="text" name="letsencrypt_path"></label>
-  <button type="submit">Add</button>
+  <div class="row-actions">
+    <button type="submit">Add target</button>
+    <button type="submit" formaction="/slaves/test" formmethod="post">Test connection</button>
+  </div>
 </form>
 </div>
 {% endblock %}

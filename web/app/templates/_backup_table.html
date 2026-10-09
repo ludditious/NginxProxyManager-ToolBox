@@ -10,9 +10,9 @@
       <td>{{ b.size_bytes }}</td>
       <td class="backup-actions">
         <a href="/backups/download/{{ b.id }}">Download</a>
-        <form method="post" action="/backups/restore-master" class="inline-form" onsubmit="return confirm('Restore volume data to master paths?');">
+        <form method="post" action="/backups/restore-master" class="inline-form" onsubmit="return confirm('Restore volume data to source paths?');">
           <input type="hidden" name="backup_id" value="{{ b.id }}">
-          <button type="submit" class="linkish">Restore master volumes</button>
+          <button type="submit" class="linkish">Restore source volumes</button>
         </form>
         <form method="post" action="/backups/delete" class="inline-form" onsubmit="return confirm('Delete this backup?');">
           <input type="hidden" name="backup_id" value="{{ b.id }}">

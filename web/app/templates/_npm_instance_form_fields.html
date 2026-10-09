@@ -1,0 +1,40 @@
+{% if show_name_field %}
+<label>Target name
+  <input type="text" name="name" value="{{ name | default('') }}" {% if require_name %}required{% endif %} placeholder="DR site 1">
+</label>
+{% endif %}
+
+<h3 class="footer-heading">Connection</h3>
+{% include "_npm_host_port.html" %}
+
+<label>NPM login email
+  <input type="email" name="identity" value="{{ identity | default('') }}" required>
+</label>
+<div class="password-row">
+  <label>NPM password
+    <input type="password" name="npm_password" class="pw-field" autocomplete="new-password">
+  </label>
+  <button type="button" class="pw-toggle">Show</button>
+</div>
+<p class="muted small">Same credentials as the NPM web UI. Leave password blank on Save to keep the stored password.</p>
+
+<h2 class="footer-heading">On-disk folders (optional)</h2>
+<label>Data folder path <span class="muted">(NPM <code>/data</code>)</span>
+  <input type="text" name="data_path" value="{{ data_path | default('') }}" placeholder="/npm-data">
+</label>
+<label>Certificates folder path <span class="muted">(NPM <code>/etc/letsencrypt</code>)</span>
+  <input type="text" name="letsencrypt_path" value="{{ letsencrypt_path | default('') }}" placeholder="/npm-letsencrypt">
+</label>
+<p class="muted small">Path <strong>inside this ToolBox container</strong> where NPM folders are mounted. Skip if you only want API configuration backups.</p>
+
+<label>Public address (optional)
+  <input type="text" name="public_endpoint" value="{{ public_endpoint | default('') }}" placeholder="npm.example.com">
+</label>
+<label>Link group
+  <input type="text" name="link_group" value="{{ link_group | default('default') }}">
+</label>
+<label class="check"><input type="checkbox" name="verify_tls" {% if verify_tls %}checked{% endif %}> Verify TLS certificate (only if using port 443 with a valid cert)</label>
+<label class="check"><input type="checkbox" name="enabled" {% if enabled %}checked{% endif %}> Enabled</label>
+{% if show_auto_pull %}
+<label class="check"><input type="checkbox" name="auto_pull" {% if auto_pull %}checked{% endif %}> Auto pull (future schedule hook)</label>
+{% endif %}

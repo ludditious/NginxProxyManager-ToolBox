@@ -52,7 +52,7 @@ def create_npm_backup(
 ) -> NpmBackup:
     master = user.master
     if not master or not master.enabled:
-        raise ValueError("Master NPM instance is disabled or not configured.")
+        raise ValueError("Source NPM instance is disabled or not configured.")
     client = npm_client_from_master(
         master,
         dns_servers=npm_dns_servers_for_user(user),

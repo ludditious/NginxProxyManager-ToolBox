@@ -52,10 +52,10 @@
 
 <section class="card">
   <h2 class="footer-heading">Host overrides</h2>
-  <p class="muted small">Use when the NPM hostname on Master does not resolve inside Docker, or resolves to an IP the container cannot reach. Map that hostname to a target IP (or internal name) the ToolBox can open. Connections use the target IP; HTTP and TLS use your NPM hostname.</p>
+  <p class="muted small">Use when the NPM hostname on Source does not resolve inside Docker, or resolves to an IP the container cannot reach. Map that hostname to a target IP (or internal name) the ToolBox can open. Connections use the target IP; HTTP and TLS use your NPM hostname.</p>
   <form method="post" action="/settings/host-overrides" id="host-overrides-form">
     <label class="check"><input type="checkbox" name="use_host_overrides" {% if host_overrides_enabled %}checked{% endif %}> Enable hostname overrides for NPM connections</label>
-    <p class="muted small">On Master, use the <strong>host / domain name</strong> in the NPM host field (leave Connect via empty). The ToolBox opens the target below but sends that name in the <code>Host</code> header.</p>
+    <p class="muted small">On Source, use the <strong>host / domain name</strong> in the NPM host field (leave Connect via empty). The ToolBox opens the target below but sends that name in the <code>Host</code> header.</p>
     <div class="host-override-list" id="host-override-list">
       {% for row in host_override_rows %}
       <div class="host-override-row">

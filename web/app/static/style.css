@@ -284,6 +284,8 @@ button.pw-toggle { background: var(--btn-muted); flex-shrink: 0; }
   border: 1px solid var(--input-border);
 }
 .mb { margin-bottom: 1.25rem; }
+.card-compact { padding: 0.75rem 1rem; margin-top: -0.5rem; margin-bottom: 1rem; }
+.card-compact button { margin: 0; }
 .page-head { display: flex; align-items: center; justify-content: space-between; gap: 1rem; flex-wrap: wrap; margin-bottom: 1rem; }
 .page-head h1 { margin: 0; }
 .site-footer { margin: 2rem 0 1.5rem; padding-top: 1rem; border-top: 1px solid var(--border); }

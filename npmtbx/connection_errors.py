@@ -21,7 +21,7 @@ def friendly_connection_error(api_url: str, exc: Exception, *, verify_tls: bool)
         return (
             "TLS failed because the certificate on that server does not match how you connected "
             f"(often HTTPS to an IP on port {port} while the cert is issued for a hostname). "
-            "On Master use the NPM hostname; in Settings → Host overrides map that name to the target IP. "
+            "On Source use the NPM hostname; in Settings → Host overrides map that name to the target IP. "
             "The ToolBox sends that hostname for TLS and the Host header. "
             "If NPM admin is HTTP only, use port 80 instead of 443."
         )
@@ -36,7 +36,7 @@ def friendly_connection_error(api_url: str, exc: Exception, *, verify_tls: bool)
         elif "timed out" in text or "timeout" in text:
             lines.append("The connection timed out — check firewall and routing from Docker.")
         lines.append(
-            "Try Connect via on Master, or Settings → Host overrides, so the container uses an address it can route to."
+            "Try Connect via on Source, or Settings → Host overrides, so the container uses an address it can route to."
         )
         return " ".join(lines)
 

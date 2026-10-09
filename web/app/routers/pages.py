@@ -214,7 +214,7 @@ def master_save(
     master.verify_tls = verify_tls == "on"
     master.enabled = enabled != "off"
     db.commit()
-    return RedirectResponse("/master?msg=Master%20saved", status_code=303)
+    return RedirectResponse("/master?msg=Source%20saved", status_code=303)
 
 
 @router.post("/master/test")
@@ -256,6 +256,53 @@ def master_test(
     )
     key = "msg" if res.ok else "err"
     return RedirectResponse(f"/master?{key}={quote(res.message)}", status_code=303)
+
+
+@router.post("/slaves/test")
+def slave_test(
+    user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+    slave_id: str = Form(""),
+    npm_host: str = Form(""),
+    connect_host: str = Form(""),
+    port_preset: str = Form("80"),
+    npm_port_custom: str = Form(""),
+    identity: str = Form(""),
+    npm_password: str = Form(""),
+    verify_tls: str | None = Form(None),
+):
+    ensure_user_defaults(db, user)
+    password_enc = ""
+    sid = slave_id.strip()
+    if sid:
+        slave = db.get(SlaveInstance, int(sid))
+        if not slave or slave.user_id != user.id:
+            return RedirectResponse("/slaves?err=Target%20not%20found", status_code=303)
+        password_enc = slave.password_enc
+    try:
+        api_url = build_api_url_from_form(
+            npm_host, port_preset, npm_port_custom, connect_host=connect_host
+        )
+    except ValueError as e:
+        return RedirectResponse(f"/slaves?err={quote(str(e))}", status_code=303)
+    admin_host: str | None = None
+    try:
+        if (npm_host or "").strip():
+            admin_host = validate_host(npm_host)
+    except ValueError:
+        admin_host = None
+    res = test_npm_connection(
+        api_url=api_url,
+        identity=identity,
+        password_enc=password_enc,
+        form_secret=npm_password or None,
+        verify_tls=verify_tls == "on",
+        dns_servers=npm_dns_servers_for_user(user),
+        host_overrides=npm_host_overrides_for_user(user),
+        admin_host=admin_host,
+    )
+    key = "msg" if res.ok else "err"
+    return RedirectResponse(f"/slaves?{key}={quote(res.message)}", status_code=303)
 
 
 @router.get("/slaves", response_class=HTMLResponse)
@@ -329,7 +376,7 @@ def slave_save(
     slave.enabled = enabled != "off"
     slave.auto_pull = auto_pull == "on"
     db.commit()
-    return RedirectResponse("/slaves?msg=Saved", status_code=303)
+    return RedirectResponse("/slaves?msg=Target%20saved", status_code=303)
 
 
 @router.post("/slaves/delete")
@@ -354,7 +401,7 @@ def slave_restore(
 ):
     slave = db.get(SlaveInstance, slave_id)
     if not slave or slave.user_id != user.id:
-        return RedirectResponse("/slaves?err=Slave%20not%20found", status_code=303)
+        return RedirectResponse("/slaves?err=Target%20not%20found", status_code=303)
     try:
         lines = restore_npm_volumes(db, user, backup_id, target=slave)
         msg = "; ".join(lines)

@@ -22,7 +22,7 @@ def friendly_auth_failure(status_code: int, body: str) -> str:
             "Common causes: port 443 goes to a reverse proxy or public site instead of the NPM admin API; "
             "wrong HTTP vs HTTPS (try port 80 if admin is plain HTTP); Host header or TLS name does not match what NPM expects. "
             "Match the host, port, and http/https you use to open NPM in a browser. "
-            "With Settings → Host overrides, put the NPM hostname on Master and the target IP you can reach from Docker."
+            "With Settings → Host overrides, put the NPM hostname on Source and the target IP you can reach from Docker."
         )
     if status_code == 404:
         return (

@@ -107,9 +107,9 @@ def npm_client_from_master(
 ) -> NpmClient:
     pw, err = resolve_secret(master.password_enc, secret)
     if err or not pw:
-        raise ValueError(err or "Master password missing.")
+        raise ValueError(err or "Source NPM password missing.")
     if not master.api_url.strip():
-        raise ValueError("Master API URL is not configured.")
+        raise ValueError("Source API URL is not configured.")
     try:
         client = NpmClient(
             master.api_url,
