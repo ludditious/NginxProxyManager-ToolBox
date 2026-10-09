@@ -30,7 +30,12 @@ def sync_source_to_target(db: Session, user: User, slave_id: int) -> list[str]:
     source = npm_client_from_master(master, dns_servers=dns, host_overrides=overrides)
     export = source.export_configuration()
     target = npm_client_from_slave(slave, dns_servers=dns, host_overrides=overrides)
-    lines = apply_export_to_target(export, target)
+    lines = apply_export_to_target(
+        export,
+        target,
+        source_data_path=(master.data_path or "").strip(),
+        source_letsencrypt_path=(master.letsencrypt_path or "").strip(),
+    )
     lines.insert(0, f"Synced Source → {slave.name or slave.id}")
     return lines
 

@@ -7,6 +7,7 @@ import json
 from copy import deepcopy
 from typing import Any
 
+from .cert_pem_io import load_certificate_pem
 from .client import NpmClient, NpmError
 from .npm_create_payloads import (
     build_create_payload,
@@ -292,10 +293,22 @@ def _remap_certificate_id(
     payload["certificate_id"] = new_id if new_id is not None else 0
 
 
+def _custom_certificate_create_payload(item: dict[str, Any]) -> dict[str, Any]:
+    domains = _normalize_domain_names(item.get("domain_names"))
+    nice = item.get("nice_name") or item.get("name") or (domains[0] if domains else "Imported certificate")
+    payload: dict[str, Any] = {"provider": "other", "nice_name": str(nice).strip()}
+    if domains:
+        payload["domain_names"] = domains
+    return payload
+
+
 def _sync_certificates(
     client: NpmClient,
     items: list[dict[str, Any]],
     lines: list[str],
+    *,
+    source_data_path: str = "",
+    source_letsencrypt_path: str = "",
 ) -> dict[int, int]:
     """Create or preserve certificates; map source cert id → target cert id."""
     target_by_domains: dict[tuple[str, ...], dict[str, Any]] = {}
@@ -307,6 +320,8 @@ def _sync_certificates(
     id_map: dict[int, int] = {}
     created = 0
     skipped = 0
+    copied = 0
+    paths_hint = False
     for item in items:
         source_id = item.get("id")
         try:
@@ -315,6 +330,33 @@ def _sync_certificates(
             source_id_int = None
         domain_key = _cert_domain_key(item)
         label = item.get("nice_name") or item.get("name") or ",".join(domain_key) or "?"
+
+        pem = load_certificate_pem(
+            item,
+            data_path=source_data_path,
+            letsencrypt_path=source_letsencrypt_path,
+        )
+        if pem:
+            cert_pem, key_pem = pem
+            existing = target_by_domains.get(domain_key) if domain_key else None
+            if existing and existing.get("id") is not None:
+                client._delete_json(f"/api/nginx/certificates/{int(existing['id'])}")
+            created_row = client._post_json(
+                "/api/nginx/certificates",
+                _custom_certificate_create_payload(item),
+            )
+            if isinstance(created_row, dict) and created_row.get("id") is not None:
+                target_id = int(created_row["id"])
+                client.upload_certificate_pem(
+                    target_id, certificate_pem=cert_pem, key_pem=key_pem
+                )
+                target_by_domains[domain_key] = created_row
+                if source_id_int is not None:
+                    id_map[source_id_int] = target_id
+                copied += 1
+                lines.append(f"Copied SSL certificate files for {label}")
+            continue
+
         payload = _npm_openapi_certificate_payload(item)
         meta = payload.get("meta") if isinstance(payload.get("meta"), dict) else {}
 
@@ -322,6 +364,8 @@ def _sync_certificates(
             ok, reason = _letsencrypt_create_allowed(meta)
             if not ok:
                 skipped += 1
+                if not source_data_path.strip() and not source_letsencrypt_path.strip():
+                    paths_hint = True
                 existing = target_by_domains.get(domain_key) if domain_key else None
                 if existing and existing.get("id") is not None and source_id_int:
                     id_map[source_id_int] = int(existing["id"])
@@ -340,8 +384,14 @@ def _sync_certificates(
                 id_map[source_id_int] = int(created_row["id"])
 
     lines.append(
-        f"Certificates on target: {created} requested via API, {skipped} skipped (see log)"
+        f"Certificates on target: {copied} copied from files, {created} requested via "
+        f"Let's Encrypt API, {skipped} skipped (see log)"
     )
+    if paths_hint:
+        lines.append(
+            "Tip: set Source NPM data path and Let's Encrypt path on the Source page "
+            "so sync can copy existing SSL files (API does not export private keys)."
+        )
     return id_map
 
 
@@ -404,7 +454,13 @@ def _sync_settings(client: NpmClient, settings: Any) -> None:
         client._put_json("/api/settings", payload)
 
 
-def apply_export_to_target(export: dict[str, Any], target: NpmClient) -> list[str]:
+def apply_export_to_target(
+    export: dict[str, Any],
+    target: NpmClient,
+    *,
+    source_data_path: str = "",
+    source_letsencrypt_path: str = "",
+) -> list[str]:
     """Replace target NPM API objects with data from a source export dict."""
     lines: list[str] = []
     path_by_key = dict(_LIST_RESOURCES)
@@ -438,7 +494,13 @@ def apply_export_to_target(export: dict[str, Any], target: NpmClient) -> list[st
             lines.append(f"Synced users on target ({upd} updated, {new} created)")
             continue
         if key == "certificates":
-            certificate_id_map = _sync_certificates(target, items, lines)
+            certificate_id_map = _sync_certificates(
+                target,
+                items,
+                lines,
+                source_data_path=source_data_path,
+                source_letsencrypt_path=source_letsencrypt_path,
+            )
             continue
         if key == "access-lists":
             access_list_id_map = _sync_access_lists(target, items)

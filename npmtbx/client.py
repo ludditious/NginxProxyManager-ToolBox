@@ -203,6 +203,48 @@ class NpmClient:
     def _post_json(self, path: str, body: dict) -> Any:
         return self._request_json("POST", path, json_body=body)
 
+    def upload_certificate_pem(
+        self, cert_id: int, *, certificate_pem: str, key_pem: str
+    ) -> Any:
+        """POST /api/nginx/certificates/{id}/upload (provider must be other)."""
+        if not self._token:
+            self.login()
+        path = f"/api/nginx/certificates/{int(cert_id)}/upload"
+        url = urljoin(self._request_root + "/", path.lstrip("/"))
+        hdrs = self._extra_headers()
+        files = {
+            "certificate": ("certificate.pem", certificate_pem.encode("utf-8"), "application/x-pem-file"),
+            "certificate_key": (
+                "certificate_key.pem",
+                key_pem.encode("utf-8"),
+                "application/x-pem-file",
+            ),
+        }
+        resp = self._session.post(
+            url,
+            files=files,
+            timeout=self.timeout,
+            verify=self._request_verify(),
+            headers=hdrs,
+        )
+        if resp.status_code == 401:
+            self._token = None
+            self.login()
+            resp = self._session.post(
+                url,
+                files=files,
+                timeout=self.timeout,
+                verify=self._request_verify(),
+                headers=hdrs,
+            )
+        if resp.status_code >= 400:
+            raise NpmError(
+                _format_api_error("POST", path, resp.status_code, resp.text, None)
+            )
+        if resp.status_code == 204 or not resp.content:
+            return None
+        return resp.json()
+
     def _put_json(self, path: str, body: dict) -> Any:
         return self._request_json("PUT", path, json_body=body)
 
