@@ -17,6 +17,28 @@ class NpmError(Exception):
     pass
 
 
+def _format_api_error(
+    method: str,
+    path: str,
+    status: int,
+    body_text: str,
+    json_body: dict | None,
+) -> str:
+    msg = f"{method} {path} failed ({status}): {(body_text or '')[:500]}"
+    if not isinstance(json_body, dict):
+        return msg
+    keys = sorted(json_body.keys())
+    if keys:
+        msg += f" | sent: {', '.join(keys)}"
+    domains = json_body.get("domain_names")
+    if domains:
+        msg += f" | domains={domains!r}"
+    name = json_body.get("nice_name") or json_body.get("name")
+    if name:
+        msg += f" | name={name!r}"
+    return msg
+
+
 class NpmClient:
     """Minimal Nginx Proxy Manager REST client (JWT bearer)."""
 
@@ -172,7 +194,7 @@ class NpmClient:
             )
         if resp.status_code >= 400:
             raise NpmError(
-                f"{method} {path} failed ({resp.status_code}): {resp.text[:500]}"
+                _format_api_error(method, path, resp.status_code, resp.text, json_body)
             )
         if resp.status_code == 204 or not resp.content:
             return None

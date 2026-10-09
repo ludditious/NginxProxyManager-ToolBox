@@ -8,6 +8,11 @@ from copy import deepcopy
 from typing import Any
 
 from .client import NpmClient, NpmError
+from .npm_create_payloads import (
+    build_create_payload,
+    normalize_domain_names as _normalize_domain_names,
+    omitted_export_fields,
+)
 
 _READONLY_KEYS = frozenset(
     {"id", "created_on", "modified_on", "meta", "owner", "owner_id", "is_deleted"}
@@ -147,31 +152,6 @@ def _certificate_meta_for_create(meta: Any) -> dict[str, Any]:
     return out
 
 
-def _normalize_domain_names(raw: Any) -> list[str]:
-    if raw is None:
-        return []
-    if isinstance(raw, str):
-        text = raw.strip()
-        if not text:
-            return []
-        if text.startswith("["):
-            try:
-                parsed = json.loads(text)
-            except json.JSONDecodeError:
-                parsed = None
-            if isinstance(parsed, list):
-                return _normalize_domain_names(parsed)
-        return [part.strip() for part in text.split(",") if part.strip()]
-    if isinstance(raw, list):
-        out: list[str] = []
-        for entry in raw:
-            text = str(entry).strip()
-            if text:
-                out.append(text)
-        return out
-    return []
-
-
 def _npm_provider_from_cert_export(item: dict[str, Any]) -> str | None:
     """Map export row to NPM ssl_provider: letsencrypt | other (OpenAPI pattern)."""
     raw = item.get("provider")
@@ -280,6 +260,22 @@ def _npm_openapi_certificate_payload(item: dict[str, Any]) -> dict[str, Any]:
     return payload
 
 
+def _remap_access_list_id(
+    payload: dict[str, Any], access_list_id_map: dict[int, int]
+) -> None:
+    aid = payload.get("access_list_id")
+    if aid in (None, "", 0, "0"):
+        return
+    try:
+        old_id = int(aid)
+    except (TypeError, ValueError):
+        return
+    if old_id <= 0:
+        return
+    new_id = access_list_id_map.get(old_id)
+    payload["access_list_id"] = new_id if new_id is not None else 0
+
+
 def _remap_certificate_id(
     payload: dict[str, Any], certificate_id_map: dict[int, int]
 ) -> None:
@@ -349,19 +345,53 @@ def _sync_certificates(
     return id_map
 
 
+def _sync_access_lists(
+    client: NpmClient, items: list[dict[str, Any]]
+) -> dict[int, int]:
+    id_map: dict[int, int] = {}
+    path = "/api/nginx/access-lists"
+    for item in items:
+        source_id = item.get("id")
+        payload = build_create_payload(path, item)
+        try:
+            created = client._post_json(path, payload)
+        except NpmError as exc:
+            omitted = omitted_export_fields(item, payload)
+            hint = f" omitted from POST: {', '.join(omitted)}" if omitted else ""
+            label = payload.get("name") or source_id or "?"
+            raise NpmError(f"Access list {label}: {exc}{hint}") from exc
+        if source_id is not None and isinstance(created, dict) and created.get("id"):
+            id_map[int(source_id)] = int(created["id"])
+    return id_map
+
+
 def _create_all(
     client: NpmClient,
     path: str,
     items: list[dict[str, Any]],
     *,
     certificate_id_map: dict[int, int] | None = None,
+    access_list_id_map: dict[int, int] | None = None,
 ) -> None:
     for item in items:
-        payload = _clean_payload(deepcopy(item))
+        payload = build_create_payload(path, item)
+        if not payload:
+            continue
         if certificate_id_map:
             _remap_certificate_id(payload, certificate_id_map)
-        if payload:
+        if access_list_id_map:
+            _remap_access_list_id(payload, access_list_id_map)
+        try:
             client._post_json(path, payload)
+        except NpmError as exc:
+            omitted = omitted_export_fields(item, payload)
+            hint_parts = [f"POST fields: {', '.join(sorted(payload.keys()))}"]
+            if omitted:
+                hint_parts.append(f"omitted export fields: {', '.join(omitted)}")
+            domains = payload.get("domain_names")
+            if domains:
+                hint_parts.append(f"domains: {domains!r}")
+            raise NpmError(f"{exc} ({'; '.join(hint_parts)})") from exc
 
 
 def _sync_settings(client: NpmClient, settings: Any) -> None:
@@ -380,6 +410,7 @@ def apply_export_to_target(export: dict[str, Any], target: NpmClient) -> list[st
     path_by_key = dict(_LIST_RESOURCES)
 
     certificate_id_map: dict[int, int] = {}
+    access_list_id_map: dict[int, int] = {}
 
     for key in _DELETE_ORDER:
         if key in ("users", "certificates"):
@@ -409,7 +440,17 @@ def apply_export_to_target(export: dict[str, Any], target: NpmClient) -> list[st
         if key == "certificates":
             certificate_id_map = _sync_certificates(target, items, lines)
             continue
-        _create_all(target, path, items, certificate_id_map=certificate_id_map)
+        if key == "access-lists":
+            access_list_id_map = _sync_access_lists(target, items)
+            lines.append(f"Applied {len(items)} access-lists to target")
+            continue
+        _create_all(
+            target,
+            path,
+            items,
+            certificate_id_map=certificate_id_map,
+            access_list_id_map=access_list_id_map,
+        )
         lines.append(f"Applied {len(items)} {key} to target")
 
     if "settings" in export:
