@@ -7,7 +7,7 @@ import re
 from pathlib import Path
 
 APP_NAME = "Nginx Proxy Manager ToolBox"
-APP_REVISION = "2026-10-09-4"
+APP_REVISION = "2026-10-09-5"
 
 _VERSION_FILE_PATTERN = re.compile(r"^(\d{4})\.(\d{2})\.(\d{2})-(\d+)$")
 

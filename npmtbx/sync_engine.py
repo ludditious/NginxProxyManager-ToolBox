@@ -37,6 +37,22 @@ _DELETE_ORDER = tuple(reversed(_CREATE_ORDER))
 
 _PROTECTED_USER_IDS = frozenset({1})
 
+_CERT_TYPES = frozenset({"http", "dns", "custom", "mkcert"})
+
+# NPM POST /api/nginx/certificates meta (provider-based and type-based APIs).
+_CERT_META_CREATE_KEYS = frozenset(
+    {
+        "certificate",
+        "certificate_key",
+        "dns_challenge",
+        "dns_provider",
+        "dns_provider_credentials",
+        "letsencrypt_agree",
+        "letsencrypt_email",
+        "propagation_seconds",
+    }
+)
+
 
 def _clean_payload(obj: Any) -> Any:
     if isinstance(obj, dict):
@@ -119,6 +135,88 @@ def _sync_users(client: NpmClient, items: list[dict[str, Any]]) -> tuple[int, in
     return updated, created
 
 
+def _certificate_meta_for_create(meta: Any) -> dict[str, Any]:
+    if not isinstance(meta, dict):
+        return {}
+    out: dict[str, Any] = {}
+    for key, val in meta.items():
+        if key not in _CERT_META_CREATE_KEYS or val is None:
+            continue
+        if key in ("certificate", "certificate_key") and not str(val).strip():
+            continue
+        out[key] = val
+    return out
+
+
+def _certificate_type_from_legacy(item: dict[str, Any]) -> str | None:
+    provider = item.get("provider")
+    if provider == "other":
+        return "custom"
+    if provider != "letsencrypt":
+        return None
+    meta = item.get("meta")
+    if isinstance(meta, dict) and meta.get("dns_challenge"):
+        return "dns"
+    return "http"
+
+
+def _certificate_create_payload(item: dict[str, Any]) -> dict[str, Any]:
+    """Build a create body allowed by NPM (strict schema, no GET-only fields)."""
+    cert_type = item.get("type")
+    if not cert_type:
+        cert_type = _certificate_type_from_legacy(item)
+    if isinstance(cert_type, str) and cert_type in _CERT_TYPES:
+        domains = item.get("domain_names")
+        if not isinstance(domains, list):
+            domains = []
+        name = str(item.get("name") or item.get("nice_name") or "").strip()
+        if not name and domains:
+            name = str(domains[0])
+        payload: dict[str, Any] = {
+            "type": cert_type,
+            "name": name,
+            "domain_names": domains,
+        }
+        if cert_type in ("http", "dns"):
+            payload["certificate_authority_id"] = int(
+                item.get("certificate_authority_id") or 1
+            )
+        if cert_type == "dns":
+            dns_provider_id = item.get("dns_provider_id")
+            if dns_provider_id:
+                payload["dns_provider_id"] = int(dns_provider_id)
+        if cert_type in ("http", "dns") and "is_ecc" in item:
+            payload["is_ecc"] = item["is_ecc"]
+        meta = _certificate_meta_for_create(item.get("meta"))
+        if meta:
+            payload["meta"] = meta
+        return payload
+
+    # Provider-based NPM API (older releases).
+    payload: dict[str, Any] = {}
+    provider = item.get("provider")
+    if provider:
+        payload["provider"] = provider
+    nice_name = item.get("nice_name")
+    if nice_name:
+        payload["nice_name"] = nice_name
+    domains = item.get("domain_names")
+    if isinstance(domains, list) and domains:
+        payload["domain_names"] = domains
+    meta = _certificate_meta_for_create(item.get("meta"))
+    if meta:
+        payload["meta"] = meta
+    return payload
+
+
+def _create_certificates(client: NpmClient, items: list[dict[str, Any]]) -> None:
+    for item in items:
+        payload = _certificate_create_payload(item)
+        if not payload:
+            continue
+        client._post_json("/api/nginx/certificates", payload)
+
+
 def _create_all(client: NpmClient, path: str, items: list[dict[str, Any]]) -> None:
     for item in items:
         payload = _clean_payload(deepcopy(item))
@@ -166,7 +264,10 @@ def apply_export_to_target(export: dict[str, Any], target: NpmClient) -> list[st
             upd, new = _sync_users(target, items)
             lines.append(f"Synced users on target ({upd} updated, {new} created)")
             continue
-        _create_all(target, path, items)
+        if key == "certificates":
+            _create_certificates(target, items)
+        else:
+            _create_all(target, path, items)
         lines.append(f"Applied {len(items)} {key} to target")
 
     if "settings" in export:
