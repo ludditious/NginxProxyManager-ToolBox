@@ -5,6 +5,8 @@ from __future__ import annotations
 
 import io
 import zipfile
+from dataclasses import dataclass
+from pathlib import PurePosixPath
 from typing import Any
 from urllib.parse import urljoin, urlparse
 
@@ -17,6 +19,13 @@ from .npm_errors import friendly_auth_failure, sni_hostname_from_host_header
 
 class NpmError(Exception):
     pass
+
+
+@dataclass(frozen=True)
+class CertificateUploadMaterial:
+    certificate_pem: str
+    key_pem: str
+    intermediate_pem: str | None = None
 
 
 def _format_api_error(
@@ -206,7 +215,12 @@ class NpmClient:
         return self._request_json("POST", path, json_body=body)
 
     def upload_certificate_pem(
-        self, cert_id: int, *, certificate_pem: str, key_pem: str
+        self,
+        cert_id: int,
+        *,
+        certificate_pem: str,
+        key_pem: str,
+        intermediate_pem: str | None = None,
     ) -> Any:
         """POST /api/nginx/certificates/{id}/upload (provider must be other)."""
         if not self._token:
@@ -214,14 +228,24 @@ class NpmClient:
         path = f"/api/nginx/certificates/{int(cert_id)}/upload"
         url = urljoin(self._request_root + "/", path.lstrip("/"))
         hdrs = self._extra_headers()
-        files = {
-            "certificate": ("certificate.pem", certificate_pem.encode("utf-8"), "application/x-pem-file"),
+        files: dict[str, tuple[str, bytes, str]] = {
+            "certificate": (
+                "certificate.pem",
+                certificate_pem.encode("utf-8"),
+                "application/x-pem-file",
+            ),
             "certificate_key": (
-                "certificate_key.pem",
+                "privkey.pem",
                 key_pem.encode("utf-8"),
                 "application/x-pem-file",
             ),
         }
+        if intermediate_pem and intermediate_pem.strip():
+            files["intermediate_certificate"] = (
+                "chain.pem",
+                intermediate_pem.encode("utf-8"),
+                "application/x-pem-file",
+            )
         resp = self._session.post(
             url,
             files=files,
@@ -254,67 +278,99 @@ class NpmClient:
         self._request_json("DELETE", path)
 
     @staticmethod
-    def _pem_pair_from_zip(data: bytes) -> tuple[str, str] | None:
+    def _material_from_zip(data: bytes) -> CertificateUploadMaterial | None:
         if not data or not data.startswith(b"PK"):
             return None
         try:
             with zipfile.ZipFile(io.BytesIO(data)) as zf:
-                names = zf.namelist()
-                chain_name = next(
-                    (n for n in names if n.rstrip("/").endswith("fullchain.pem")),
-                    None,
-                )
-                key_name = next(
-                    (n for n in names if n.rstrip("/").endswith("privkey.pem")),
-                    None,
-                )
-                if not chain_name or not key_name:
+                by_name: dict[str, str] = {}
+                for name in zf.namelist():
+                    if name.endswith("/"):
+                        continue
+                    base = PurePosixPath(name).name.lower()
+                    if not base.endswith(".pem"):
+                        continue
+                    text = zf.read(name).decode("utf-8", errors="replace").strip()
+                    if "BEGIN" in text:
+                        by_name[base] = text
+                key = by_name.get("privkey.pem")
+                if not key:
                     return None
-                chain = zf.read(chain_name).decode("utf-8", errors="replace").strip()
-                key = zf.read(key_name).decode("utf-8", errors="replace").strip()
-                if "BEGIN CERTIFICATE" in chain and "BEGIN" in key:
-                    return chain, key
+                chain = by_name.get("fullchain.pem")
+                intermediate = by_name.get("chain.pem")
+                cert_only = by_name.get("cert.pem")
+                if chain:
+                    cert_body = chain
+                    inter = intermediate if intermediate and intermediate not in chain else None
+                elif cert_only:
+                    cert_body = cert_only
+                    inter = intermediate
+                    if inter:
+                        cert_body = cert_only
+                else:
+                    return None
+                if "BEGIN CERTIFICATE" not in cert_body:
+                    return None
+                return CertificateUploadMaterial(
+                    certificate_pem=cert_body,
+                    key_pem=key,
+                    intermediate_pem=inter,
+                )
         except (zipfile.BadZipFile, OSError, KeyError):
             return None
-        return None
 
-    def download_letsencrypt_pem(self, cert_id: int) -> tuple[str, str] | None:
+    def download_certificate_materials(
+        self, cert_id: int
+    ) -> tuple[CertificateUploadMaterial | None, str | None]:
         """
-        GET /api/nginx/certificates/{id}/download — NPM zips live PEMs on the Source host.
-        Works when ToolBox only has API access (no local volume paths).
+        GET /api/nginx/certificates/{id}/download — NPM zips PEMs on the Source host.
         """
         if not self._token:
             self.login()
         path = f"/api/nginx/certificates/{int(cert_id)}/download"
         url = urljoin(self._request_root + "/", path.lstrip("/"))
-        hdrs = self._extra_headers()
+        hdrs = {**self._extra_headers(), "Accept": "application/zip, application/octet-stream, */*"}
         try:
             resp = self._session.get(
                 url,
-                timeout=self.timeout,
+                timeout=max(self.timeout, 180),
                 verify=self._request_verify(),
                 headers=hdrs,
-                stream=True,
             )
-        except requests.RequestException:
-            return None
+        except requests.RequestException as exc:
+            return None, f"download request failed: {exc}"
         if resp.status_code == 401:
             self._token = None
             self.login()
             try:
                 resp = self._session.get(
                     url,
-                    timeout=self.timeout,
+                    timeout=max(self.timeout, 180),
                     verify=self._request_verify(),
                     headers=hdrs,
-                    stream=True,
                 )
-            except requests.RequestException:
-                return None
+            except requests.RequestException as exc:
+                return None, f"download request failed: {exc}"
         if resp.status_code >= 400:
+            body = (resp.text or "")[:300]
+            return None, f"download HTTP {resp.status_code}: {body}"
+        content = resp.content or b""
+        material = self._material_from_zip(content)
+        if material:
+            return material, None
+        ctype = resp.headers.get("content-type", "")
+        if content[:1] == b"{":
+            return None, f"download returned JSON not zip: {content[:300]!r}"
+        return None, (
+            f"download returned unexpected data (content-type={ctype!r}, "
+            f"{len(content)} bytes, zip PEMs missing)"
+        )
+
+    def download_letsencrypt_pem(self, cert_id: int) -> tuple[str, str] | None:
+        material, _err = self.download_certificate_materials(cert_id)
+        if not material:
             return None
-        content = resp.content
-        return self._pem_pair_from_zip(content)
+        return material.certificate_pem, material.key_pem
 
     def probe_api(self) -> bool:
         """Return True if this host looks like NPM (tokens endpoint exists)."""

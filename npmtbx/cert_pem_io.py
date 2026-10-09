@@ -6,6 +6,8 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any  # container handle from docker SDK
 
+from .client import CertificateUploadMaterial
+
 
 def _read_pem_file(path: Path) -> str | None:
     if not path.is_file():
@@ -144,42 +146,49 @@ def export_is_letsencrypt(item: dict[str, Any]) -> bool:
     return str(item.get("type") or "").strip().lower() in ("http", "dns")
 
 
-def load_certificate_pem(
+def _pair_as_material(pair: tuple[str, str]) -> CertificateUploadMaterial:
+    return CertificateUploadMaterial(certificate_pem=pair[0], key_pem=pair[1])
+
+
+def load_certificate_material(
     item: dict[str, Any],
     *,
     data_path: str,
     letsencrypt_path: str,
     docker_container_id: str = "",
     source_client: Any | None = None,
-) -> tuple[tuple[str, str] | None, str]:
+) -> tuple[CertificateUploadMaterial | None, str, str]:
     """
-    Returns (pem_pair, method_label). method_label is empty when not found.
+    Returns (material, method_label, source_download_error).
     """
+    api_error = ""
     from_meta = pem_from_meta(item.get("meta"))
     if from_meta:
-        return from_meta, "export meta"
+        return _pair_as_material(from_meta), "export meta", ""
     cid = item.get("id")
     if cid is None:
-        return None, ""
+        return None, "", ""
     try:
         cert_id = int(cid)
     except (TypeError, ValueError):
-        return None, ""
-    if source_client is not None and export_is_letsencrypt(item):
-        from_api = source_client.download_letsencrypt_pem(cert_id)
+        return None, "", ""
+    if source_client is not None:
+        from_api, err = source_client.download_certificate_materials(cert_id)
         if from_api:
-            return from_api, "Source NPM download API"
+            return from_api, "Source NPM download API", ""
+        if err:
+            api_error = err
     from_paths = pem_from_npm_data_paths(
         cert_id=cert_id,
         data_path=data_path,
         letsencrypt_path=letsencrypt_path,
     )
     if from_paths:
-        return from_paths, "Source volume paths"
+        return _pair_as_material(from_paths), "Source volume paths", api_error
     from_docker = pem_from_docker_container(docker_container_id, cert_id)
     if from_docker:
-        return from_docker, "Source Docker container"
-    return None, ""
+        return _pair_as_material(from_docker), "Source Docker container", api_error
+    return None, "", api_error
 
 
 def pem_lookup_hint(

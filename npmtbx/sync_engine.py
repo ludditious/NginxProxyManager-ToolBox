@@ -7,7 +7,7 @@ import json
 from copy import deepcopy
 from typing import Any
 
-from .cert_pem_io import export_is_letsencrypt, load_certificate_pem, pem_lookup_hint
+from .cert_pem_io import export_is_letsencrypt, load_certificate_material, pem_lookup_hint
 from .client import NpmClient, NpmError
 from .npm_create_payloads import (
     build_create_payload,
@@ -333,15 +333,16 @@ def _sync_certificates(
         domain_key = _cert_domain_key(item)
         label = item.get("nice_name") or item.get("name") or ",".join(domain_key) or "?"
 
-        pem, pem_via = load_certificate_pem(
+        material, pem_via, download_err = load_certificate_material(
             item,
             data_path=source_data_path,
             letsencrypt_path=source_letsencrypt_path,
             docker_container_id=source_docker_container_id,
             source_client=source_client,
         )
-        if pem:
-            cert_pem, key_pem = pem
+        if download_err:
+            lines.append(f"Certificate {label}: Source GET download — {download_err}")
+        if material:
             existing = target_by_domains.get(domain_key) if domain_key else None
             if existing and existing.get("id") is not None:
                 client._delete_json(f"/api/nginx/certificates/{int(existing['id'])}")
@@ -352,9 +353,18 @@ def _sync_certificates(
             if isinstance(created_row, dict) and created_row.get("id") is not None:
                 target_id = int(created_row["id"])
                 client.upload_certificate_pem(
-                    target_id, certificate_pem=cert_pem, key_pem=key_pem
+                    target_id,
+                    certificate_pem=material.certificate_pem,
+                    key_pem=material.key_pem,
+                    intermediate_pem=material.intermediate_pem,
                 )
-                target_by_domains[domain_key] = created_row
+                try:
+                    refreshed = client._get_json(f"/api/nginx/certificates/{target_id}")
+                    if isinstance(refreshed, dict):
+                        target_by_domains[domain_key] = refreshed
+                        created_row = refreshed
+                except NpmError:
+                    pass
                 if source_id_int is not None:
                     id_map[source_id_int] = target_id
                 copied += 1
@@ -379,12 +389,9 @@ def _sync_certificates(
                     letsencrypt_path=source_letsencrypt_path,
                     docker_container_id=source_docker_container_id,
                 )
-                api_note = ""
-                if source_client is not None and export_is_letsencrypt(item):
-                    api_note = "; Source download API had no PEM either"
                 lines.append(
                     f"Skipped certificate {label}: {reason} "
-                    f"(no PEM found; {hint}{api_note})"
+                    f"(no PEM found; {hint})"
                 )
                 existing = target_by_domains.get(domain_key) if domain_key else None
                 if existing and existing.get("id") is not None and source_id_int:
