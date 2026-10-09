@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+import json
 from copy import deepcopy
 from typing import Any
 
@@ -37,9 +38,7 @@ _DELETE_ORDER = tuple(reversed(_CREATE_ORDER))
 
 _PROTECTED_USER_IDS = frozenset({1})
 
-_CERT_TYPES = frozenset({"http", "dns", "custom", "mkcert"})
-
-# NPM POST /api/nginx/certificates meta (provider-based and type-based APIs).
+# NPM OpenAPI POST /api/nginx/certificates — certificate-object.json#/properties/meta
 _CERT_META_CREATE_KEYS = frozenset(
     {
         "certificate",
@@ -148,36 +147,72 @@ def _certificate_meta_for_create(meta: Any) -> dict[str, Any]:
     return out
 
 
-def _certificate_type_from_legacy(item: dict[str, Any]) -> str | None:
-    provider = item.get("provider")
-    if provider == "other":
-        return "custom"
-    if provider != "letsencrypt":
-        return None
-    meta = item.get("meta")
-    if isinstance(meta, dict) and meta.get("dns_challenge"):
-        return "dns"
-    return "http"
+def _normalize_domain_names(raw: Any) -> list[str]:
+    if raw is None:
+        return []
+    if isinstance(raw, str):
+        text = raw.strip()
+        if not text:
+            return []
+        if text.startswith("["):
+            try:
+                parsed = json.loads(text)
+            except json.JSONDecodeError:
+                parsed = None
+            if isinstance(parsed, list):
+                return _normalize_domain_names(parsed)
+        return [part.strip() for part in text.split(",") if part.strip()]
+    if isinstance(raw, list):
+        out: list[str] = []
+        for entry in raw:
+            text = str(entry).strip()
+            if text:
+                out.append(text)
+        return out
+    return []
 
 
-def _certificate_provider_from_export(item: dict[str, Any]) -> str | None:
-    provider = item.get("provider")
-    if isinstance(provider, str) and provider.strip():
-        return provider.strip()
-    cert_type = item.get("type")
-    if cert_type == "custom":
-        return "other"
-    if cert_type == "mkcert":
+def _npm_provider_from_cert_export(item: dict[str, Any]) -> str | None:
+    """Map export row to NPM ssl_provider: letsencrypt | other (OpenAPI pattern)."""
+    raw = item.get("provider")
+    if isinstance(raw, str) and raw.strip():
+        provider = raw.strip().lower()
+        if provider in ("letsencrypt", "other"):
+            return provider
+    cert_type = str(item.get("type") or "").strip().lower()
+    if cert_type in ("custom", "mkcert"):
         return "other"
     if cert_type in ("http", "dns"):
         return "letsencrypt"
+    meta = item.get("meta")
+    if isinstance(meta, dict) and meta.get("dns_challenge") is True:
+        return "letsencrypt"
+    if isinstance(meta, dict) and (
+        meta.get("letsencrypt_email") or meta.get("letsencrypt_agree") is not None
+    ):
+        return "letsencrypt"
+    if isinstance(meta, dict) and (
+        meta.get("certificate") or meta.get("certificate_key")
+    ):
+        return "other"
     return None
 
 
-def _certificate_meta_for_provider_create(
+def _certificate_meta_enrich_from_item(
     item: dict[str, Any], meta: dict[str, Any]
 ) -> dict[str, Any]:
-    cert_type = item.get("type")
+    dns = item.get("dns_provider")
+    if isinstance(dns, dict):
+        name = dns.get("name") or dns.get("provider")
+        if name and "dns_provider" not in meta:
+            meta = {**meta, "dns_provider": str(name)}
+        creds = dns.get("credentials")
+        if creds is not None and "dns_provider_credentials" not in meta:
+            if isinstance(creds, str):
+                meta = {**meta, "dns_provider_credentials": creds}
+            else:
+                meta = {**meta, "dns_provider_credentials": json.dumps(creds)}
+    cert_type = str(item.get("type") or "").strip().lower()
     if cert_type == "dns" and "dns_challenge" not in meta:
         meta = {**meta, "dns_challenge": True}
     elif cert_type == "http" and "dns_challenge" not in meta:
@@ -185,92 +220,35 @@ def _certificate_meta_for_provider_create(
     return meta
 
 
-def _certificate_provider_payload(item: dict[str, Any]) -> dict[str, Any]:
-    """NPM releases using provider / nice_name (OpenAPI schema)."""
-    provider = _certificate_provider_from_export(item)
+def _npm_openapi_certificate_payload(item: dict[str, Any]) -> dict[str, Any]:
+    """
+    POST /api/nginx/certificates (OpenAPI): only provider, nice_name, domain_names, meta.
+    See backend/schema/paths/nginx/certificates/post.json
+    """
+    provider = _npm_provider_from_cert_export(item)
     if not provider:
-        return {}
+        label = item.get("nice_name") or item.get("name") or item.get("id") or "?"
+        raise NpmError(
+            f"Certificate {label}: cannot map to NPM provider (letsencrypt or other)."
+        )
     payload: dict[str, Any] = {"provider": provider}
     nice_name = item.get("nice_name") or item.get("name")
     if nice_name:
-        payload["nice_name"] = str(nice_name)
-    domains = item.get("domain_names")
-    if isinstance(domains, list) and domains:
+        payload["nice_name"] = str(nice_name).strip()
+    domains = _normalize_domain_names(item.get("domain_names"))
+    if domains:
         payload["domain_names"] = domains
     meta = _certificate_meta_for_create(item.get("meta"))
-    meta = _certificate_meta_for_provider_create(item, meta)
+    meta = _certificate_meta_enrich_from_item(item, meta)
     if meta:
         payload["meta"] = meta
     return payload
-
-
-def _certificate_type_payload(item: dict[str, Any]) -> dict[str, Any]:
-    """NPM releases using type / name (internal JSON schema)."""
-    cert_type = item.get("type")
-    if not cert_type:
-        cert_type = _certificate_type_from_legacy(item)
-    if not isinstance(cert_type, str) or cert_type not in _CERT_TYPES:
-        return {}
-    domains = item.get("domain_names")
-    if not isinstance(domains, list):
-        domains = []
-    name = str(item.get("name") or item.get("nice_name") or "").strip()
-    if not name and domains:
-        name = str(domains[0])
-    payload: dict[str, Any] = {
-        "type": cert_type,
-        "name": name,
-        "domain_names": domains,
-    }
-    if cert_type in ("http", "dns"):
-        payload["certificate_authority_id"] = int(
-            item.get("certificate_authority_id") or 1
-        )
-    if cert_type == "dns":
-        dns_provider_id = item.get("dns_provider_id")
-        if dns_provider_id:
-            payload["dns_provider_id"] = int(dns_provider_id)
-    if cert_type in ("http", "dns") and "is_ecc" in item:
-        payload["is_ecc"] = item["is_ecc"]
-    meta = _certificate_meta_for_create(item.get("meta"))
-    if meta:
-        payload["meta"] = meta
-    return payload
-
-
-def _certificate_create_payloads(item: dict[str, Any]) -> list[dict[str, Any]]:
-    """Provider-style first (common on 2.x), then type-style (newer backend)."""
-    seen: set[str] = set()
-    out: list[dict[str, Any]] = []
-    for payload in (
-        _certificate_provider_payload(item),
-        _certificate_type_payload(item),
-    ):
-        if not payload:
-            continue
-        key = repr(sorted(payload.items()))
-        if key in seen:
-            continue
-        seen.add(key)
-        out.append(payload)
-    return out
 
 
 def _create_certificates(client: NpmClient, items: list[dict[str, Any]]) -> None:
     for item in items:
-        payloads = _certificate_create_payloads(item)
-        if not payloads:
-            continue
-        last_err: NpmError | None = None
-        for payload in payloads:
-            try:
-                client._post_json("/api/nginx/certificates", payload)
-                last_err = None
-                break
-            except NpmError as exc:
-                last_err = exc
-        if last_err:
-            raise last_err
+        payload = _npm_openapi_certificate_payload(item)
+        client._post_json("/api/nginx/certificates", payload)
 
 
 def _create_all(client: NpmClient, path: str, items: list[dict[str, Any]]) -> None:
