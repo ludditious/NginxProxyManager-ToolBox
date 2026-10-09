@@ -1,0 +1,14 @@
+<section class="card backup-section">
+  <h2 class="footer-heading">Upload & restore</h2>
+  <p class="muted small">Restore from a backup file you downloaded earlier.</p>
+  <form method="post" action="/backups/upload/npm" enctype="multipart/form-data" class="mb">
+    <label>NPM backup ZIP<input type="file" name="backup_file" accept=".zip,application/zip" required></label>
+    <label class="check"><input type="checkbox" name="restore_volumes" value="on"> After upload, restore volume data to Source paths</label>
+    <button type="submit">Upload NPM backup</button>
+  </form>
+  <form method="post" action="/backups/upload/toolbox" enctype="multipart/form-data">
+    <label>ToolBox configuration JSON<input type="file" name="config_file" accept=".json,application/json" required></label>
+    <label class="check"><input type="checkbox" name="apply_now" value="on" checked> Apply configuration after upload</label>
+    <button type="submit">Upload ToolBox config</button>
+  </form>
+</section>

@@ -11,11 +11,16 @@ from sqlalchemy.orm import Session
 
 from .auth_constants import DEFAULT_PASSWORD, DEFAULT_USERNAME
 from .backup_retention import DEFAULT_RETENTION_DAYS
-from .cron_logic import users_due_for_auto_backup, users_due_for_schedule
+from .cron_logic import (
+    user_due_for_sync_schedule,
+    users_due_for_auto_backup,
+    users_due_for_schedule,
+)
 from .email_notify import notify_backup_result, send_notification
 from .models import (
     BackupRunLog,
     BackupSchedule,
+    SyncSchedule,
     CronTickLog,
     MasterInstance,
     NotificationPrefs,
@@ -104,6 +109,8 @@ def ensure_user_defaults(db: Session, user: User) -> None:
         db.add(MasterInstance(user_id=user.id))
     if not user.schedule:
         db.add(BackupSchedule(user_id=user.id))
+    if not user.sync_schedule:
+        db.add(SyncSchedule(user_id=user.id))
     if not user.npm_backup_settings:
         db.add(NpmBackupSettings(user_id=user.id))
     if not user.npm_dns_settings:
@@ -179,11 +186,25 @@ def run_cron_tick(db: Session) -> dict:
             ran += 1
             if log.exit_code != 0:
                 errors += 1
+        sync_ran = 0
+        for user in db.query(User).all():
+            if not user_due_for_sync_schedule(db, user, now):
+                continue
+            from .npm_sync_service import sync_all_scheduled_targets
+
+            try:
+                sync_all_scheduled_targets(db, user)
+                sync_ran += 1
+            except Exception:
+                errors += 1
+            if user.sync_schedule:
+                user.sync_schedule.last_run_at = utcnow()
+        db.commit()
         tick = CronTickLog(
             users_due=len(users_due),
             backups_ran=ran,
             errors=errors,
-            detail=f"schedule={len(due_schedule)} auto={len(due_auto)}",
+            detail=f"schedule={len(due_schedule)} auto={len(due_auto)} sync={sync_ran}",
         )
         db.add(tick)
         db.commit()

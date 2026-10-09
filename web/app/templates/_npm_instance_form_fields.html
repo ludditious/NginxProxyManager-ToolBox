@@ -35,6 +35,3 @@
 </label>
 <label class="check"><input type="checkbox" name="verify_tls" {% if verify_tls %}checked{% endif %}> Verify TLS certificate (only if using port 443 with a valid cert)</label>
 <label class="check"><input type="checkbox" name="enabled" {% if enabled %}checked{% endif %}> Enabled</label>
-{% if show_auto_pull %}
-<label class="check"><input type="checkbox" name="auto_pull" {% if auto_pull %}checked{% endif %}> Auto pull (future schedule hook)</label>
-{% endif %}

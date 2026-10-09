@@ -1,0 +1,75 @@
+{% extends "base.html" %}
+{% block title %} - Migrate{% endblock %}
+{% block content %}
+<div class="page-form-layout">
+<h1>Migrate</h1>
+<p class="muted small">Move ToolBox snapshots or NPM backups between hosts. Pick a server from your configured <strong>Source</strong> and <strong>Targets</strong>, set its remote ToolBox URL and ingest token once, then push or pull.</p>
+{% if message %}<p class="notice notice-ok">{{ message }}</p>{% endif %}
+{% if error %}<p class="notice notice-err">{{ error }}</p>{% endif %}
+
+<section class="card">
+  <h2 class="footer-heading">This ToolBox ingest token</h2>
+  <p class="muted small">Other ToolBox instances use this when pushing snapshots here.</p>
+  <code class="cmd-box">{{ ingest_secret }}</code>
+</section>
+
+<section class="card">
+  <h2 class="footer-heading">Remote ToolBox connection</h2>
+  <p class="muted small">Saved on the selected Source or Target record.</p>
+  <form method="post" action="/migrate/credentials/save">
+    <label>Server
+      <select name="server_key" required {% if not servers %}disabled{% endif %}>
+        {% for s in servers %}
+        <option value="{{ s.key }}">{{ s.label }}</option>
+        {% endfor %}
+      </select>
+    </label>
+    {% if not servers %}<p class="muted small">Configure <a href="/master">Source</a> or <a href="/slaves">Targets</a> first.</p>{% endif %}
+    <label>Remote ToolBox URL<input type="url" name="migrate_url" placeholder="https://toolbox.example.local" required></label>
+    <label>Remote ingest token<input type="password" name="migrate_token" autocomplete="off"></label>
+    <p class="muted small">Leave token blank to keep the stored token for that server.</p>
+    <button type="submit">Save connection</button>
+  </form>
+</section>
+
+<section class="card">
+  <h2 class="footer-heading">Push to new host</h2>
+  <form method="post" action="/migrate/push">
+    <label>Destination server
+      <select name="server_key" required>
+        {% for s in servers %}
+        <option value="{{ s.key }}">{{ s.label }}</option>
+        {% endfor %}
+      </select>
+    </label>
+    <label>Snapshot type
+      <select name="snapshot_type">
+        <option value="npm">NPM backup (ZIP)</option>
+        <option value="toolbox">ToolBox configuration</option>
+      </select>
+    </label>
+    <button type="submit">Push</button>
+  </form>
+</section>
+
+<section class="card">
+  <h2 class="footer-heading">Pull from old host</h2>
+  <form method="post" action="/migrate/pull">
+    <label>Source server
+      <select name="server_key" required>
+        {% for s in servers %}
+        <option value="{{ s.key }}">{{ s.label }}</option>
+        {% endfor %}
+      </select>
+    </label>
+    <label>Snapshot type
+      <select name="snapshot_type">
+        <option value="npm">NPM backup (ZIP)</option>
+        <option value="toolbox">ToolBox configuration</option>
+      </select>
+    </label>
+    <button type="submit">Pull</button>
+  </form>
+</section>
+</div>
+{% endblock %}

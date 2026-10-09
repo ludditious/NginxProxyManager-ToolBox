@@ -43,7 +43,7 @@
   <input type="hidden" name="candidate_id" value="{{ auto_candidate.container_id }}">
   {% endif %}
 
-  {% with show_name_field=false, npm_host=npm_host, connect_host=connect_host, port_preset=port_preset, npm_port_custom=npm_port_custom, identity=master.identity if master else '', data_path=master.data_path if master else '', letsencrypt_path=master.letsencrypt_path if master else '', public_endpoint=master.public_endpoint if master else '', link_group=master.link_group if master else 'default', verify_tls=master.verify_tls if master else false, enabled=(master.enabled if master else true), show_auto_pull=false %}
+  {% with show_name_field=false, npm_host=npm_host, connect_host=connect_host, port_preset=port_preset, npm_port_custom=npm_port_custom, identity=master.identity if master else '', data_path=master.data_path if master else '', letsencrypt_path=master.letsencrypt_path if master else '', public_endpoint=master.public_endpoint if master else '', link_group=master.link_group if master else 'default', verify_tls=master.verify_tls if master else false, enabled=(master.enabled if master else true) %}
   {% include "_npm_instance_form_fields.html" %}
   {% endwith %}
 

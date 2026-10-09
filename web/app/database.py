@@ -52,6 +52,11 @@ def migrate_schema() -> None:
         ("slave_instances", "connect_host", "VARCHAR(512) NOT NULL DEFAULT ''"),
         ("npm_dns_settings", "use_host_overrides", "BOOLEAN NOT NULL DEFAULT 0"),
         ("npm_dns_settings", "host_overrides", "TEXT NOT NULL DEFAULT ''"),
+        ("master_instances", "migrate_toolbox_url", "VARCHAR(512) NOT NULL DEFAULT ''"),
+        ("master_instances", "migrate_ingest_token_enc", "TEXT NOT NULL DEFAULT ''"),
+        ("slave_instances", "schedule_sync_enabled", "BOOLEAN NOT NULL DEFAULT 0"),
+        ("slave_instances", "migrate_toolbox_url", "VARCHAR(512) NOT NULL DEFAULT ''"),
+        ("slave_instances", "migrate_ingest_token_enc", "TEXT NOT NULL DEFAULT ''"),
     )
     with engine.begin() as conn:
         for table, column, ddl in patches:

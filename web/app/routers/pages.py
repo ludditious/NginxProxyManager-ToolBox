@@ -52,7 +52,10 @@ from ..npm_bridge import (
     store_secret,
     test_npm_connection,
 )
+from ..migrate_service import run_migrate_pull, run_migrate_push, save_migrate_credentials
+from ..npm_sync_service import sync_source_to_target
 from ..remote_toolbox import pull_latest_from_source, push_backup_to_remote
+from ..server_registry import list_configured_servers, resolve_server_ref
 from ..schedule_ui import INTERVAL_CHOICES, minutes_from_form
 from ..security import hash_password, verify_password
 from ..services import (
@@ -345,7 +348,6 @@ def slave_save(
     link_group: str = Form("default"),
     verify_tls: str | None = Form(None),
     enabled: str | None = Form(None),
-    auto_pull: str | None = Form(None),
 ):
     ensure_user_defaults(db, user)
     sid = slave_id.strip()
@@ -374,7 +376,6 @@ def slave_save(
     slave.link_group = link_group.strip() or "default"
     slave.verify_tls = verify_tls == "on"
     slave.enabled = enabled != "off"
-    slave.auto_pull = auto_pull == "on"
     db.commit()
     return RedirectResponse("/slaves?msg=Target%20saved", status_code=303)
 
@@ -410,19 +411,32 @@ def slave_restore(
         return RedirectResponse(f"/slaves?err={quote(str(e))}", status_code=303)
 
 
-@router.get("/remote", response_class=HTMLResponse)
-def remote_page(request: Request, user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+@router.get("/remote")
+def remote_redirect():
+    return RedirectResponse("/migrate", status_code=307)
+
+
+@router.get("/migrate", response_class=HTMLResponse)
+def migrate_page(
+    request: Request,
+    user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+    msg: str | None = None,
+    err: str | None = None,
+):
     ensure_user_defaults(db, user)
     settings = get_settings()
+    servers = list_configured_servers(user)
     return templates.TemplateResponse(
         request,
-        "remote.html",
+        "migrate.html",
         _ctx(
             request,
             user,
-            destinations=sorted(user.remote_destinations, key=lambda r: r.sort_order),
-            sources=sorted(user.remote_sources, key=lambda r: r.sort_order),
+            servers=servers,
             ingest_secret=settings.ingest_secret,
+            message=msg,
+            error=err,
         ),
     )
 
@@ -506,25 +520,52 @@ def remote_pull(user: User = Depends(get_current_user), db: Session = Depends(ge
         return RedirectResponse(f"/remote?err={quote(str(e))}", status_code=303)
 
 
-@router.get("/schedule", response_class=HTMLResponse)
-def schedule_page(request: Request, user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+@router.get("/schedule")
+def schedule_redirect():
+    return RedirectResponse("/synchronize", status_code=307)
+
+
+@router.get("/synchronize", response_class=HTMLResponse)
+def synchronize_page(
+    request: Request,
+    user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+    msg: str | None = None,
+    err: str | None = None,
+):
     ensure_user_defaults(db, user)
     sched = user.schedule
+    sync_sched = user.sync_schedule
+    target_rows = []
+    for s in sorted(user.slaves, key=lambda x: x.sort_order):
+        h, pr, cu = parse_api_url(s.api_url)
+        target_rows.append(
+            {
+                "slave": s,
+                "npm_host": s.admin_host or h,
+                "port_preset": pr,
+                "npm_port_custom": cu,
+            }
+        )
     return templates.TemplateResponse(
         request,
-        "schedule.html",
+        "synchronize.html",
         _ctx(
             request,
             user,
             schedule=sched,
+            sync_schedule=sync_sched,
+            target_rows=target_rows,
             day_keys=DAY_KEYS,
             interval_choices=INTERVAL_CHOICES,
+            message=msg,
+            error=err,
         ),
     )
 
 
-@router.post("/schedule/save")
-def schedule_save(
+@router.post("/synchronize/backup/save")
+def synchronize_backup_save(
     user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
     enabled: str | None = Form(None),
@@ -538,7 +579,119 @@ def schedule_save(
     sched.interval_minutes = minutes_from_form(interval_minutes)
     sched.set_days({d.lower() for d in days if d.lower() in DAY_KEYS})
     db.commit()
-    return RedirectResponse("/schedule?msg=Saved", status_code=303)
+    return RedirectResponse("/synchronize?msg=Backup%20schedule%20saved", status_code=303)
+
+
+@router.post("/synchronize/sync-schedule/save")
+def synchronize_sync_schedule_save(
+    user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+    sync_enabled: str | None = Form(None),
+    interval_minutes: str = Form("1440"),
+    sync_days: list[str] = Form(default=[]),
+):
+    ensure_user_defaults(db, user)
+    sched = user.sync_schedule
+    assert sched is not None
+    sched.enabled = sync_enabled == "on"
+    sched.interval_minutes = minutes_from_form(interval_minutes)
+    sched.set_days({d.lower() for d in sync_days if d.lower() in DAY_KEYS})
+    db.commit()
+    return RedirectResponse("/synchronize?msg=Sync%20schedule%20saved", status_code=303)
+
+
+@router.post("/synchronize/targets/save")
+def synchronize_targets_save(
+    user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+    sync_target: list[str] = Form(default=[]),
+):
+    ensure_user_defaults(db, user)
+    enabled_ids = {int(x) for x in sync_target if str(x).isdigit()}
+    for slave in user.slaves:
+        slave.schedule_sync_enabled = slave.id in enabled_ids
+    db.commit()
+    return RedirectResponse("/synchronize?msg=Target%20sync%20selection%20saved", status_code=303)
+
+
+@router.post("/synchronize/sync-now/{slave_id}")
+def synchronize_sync_now(
+    slave_id: int,
+    user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    ensure_user_defaults(db, user)
+    try:
+        lines = sync_source_to_target(db, user, slave_id)
+        return RedirectResponse(f"/synchronize?msg={quote('; '.join(lines))}", status_code=303)
+    except Exception as e:
+        return RedirectResponse(f"/synchronize?err={quote(str(e))}", status_code=303)
+
+
+@router.post("/schedule/save")
+def schedule_save_legacy(
+    user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+    enabled: str | None = Form(None),
+    interval_minutes: str = Form("1440"),
+    days: list[str] = Form(default=[]),
+):
+    return synchronize_backup_save(user, db, enabled, interval_minutes, days)
+
+
+@router.post("/migrate/credentials/save")
+def migrate_credentials_save(
+    user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+    server_key: str = Form(""),
+    migrate_url: str = Form(""),
+    migrate_token: str = Form(""),
+):
+    ensure_user_defaults(db, user)
+    ref = resolve_server_ref(user, server_key)
+    if not ref:
+        return RedirectResponse("/migrate?err=Invalid%20server", status_code=303)
+    try:
+        save_migrate_credentials(
+            ref,
+            base_url=migrate_url,
+            ingest_token=migrate_token or None,
+            secret_key=get_settings().secret_key,
+        )
+        db.commit()
+    except ValueError as e:
+        return RedirectResponse(f"/migrate?err={quote(str(e))}", status_code=303)
+    return RedirectResponse("/migrate?msg=Connection%20saved", status_code=303)
+
+
+@router.post("/migrate/push")
+def migrate_push(
+    user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+    server_key: str = Form(""),
+    snapshot_type: str = Form("npm"),
+):
+    ensure_user_defaults(db, user)
+    try:
+        msg = run_migrate_push(db, user, server_key, snapshot_type)
+        return RedirectResponse(f"/migrate?msg={quote(msg)}", status_code=303)
+    except Exception as e:
+        return RedirectResponse(f"/migrate?err={quote(str(e))}", status_code=303)
+
+
+@router.post("/migrate/pull")
+def migrate_pull(
+    user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+    server_key: str = Form(""),
+    snapshot_type: str = Form("npm"),
+):
+    ensure_user_defaults(db, user)
+    try:
+        msg = run_migrate_pull(db, user, server_key, snapshot_type)
+        return RedirectResponse(f"/migrate?msg={quote(msg)}", status_code=303)
+    except Exception as e:
+        return RedirectResponse(f"/migrate?err={quote(str(e))}", status_code=303)
 
 
 @router.get("/logs", response_class=HTMLResponse)
@@ -597,6 +750,70 @@ def backups_page(
 def backups_create(user: User = Depends(get_current_user), db: Session = Depends(get_db)):
     run_user_backup(db, user, trigger="manual")
     return RedirectResponse("/backups?msg=Backup%20created", status_code=303)
+
+
+@router.post("/backups/upload/npm")
+async def backups_upload_npm(
+    user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+    backup_file: UploadFile = File(...),
+    restore_volumes: str | None = Form(None),
+):
+    from ..services import ingest_snapshot_file
+
+    raw = await backup_file.read()
+    if not raw:
+        return RedirectResponse("/backups?err=Empty%20file", status_code=303)
+    name = backup_file.filename or "upload.zip"
+    row = ingest_snapshot_file(
+        db,
+        file_name=name,
+        file_bytes=raw,
+        name=name,
+        snapshot_id="",
+    )
+    msg = f"Uploaded NPM backup {row.name}"
+    if restore_volumes == "on":
+        try:
+            lines = restore_npm_volumes(db, user, row.id)
+            msg = f"{msg}; {'; '.join(lines)}"
+        except Exception as e:
+            return RedirectResponse(f"/backups?err={quote(str(e))}", status_code=303)
+    return RedirectResponse(f"/backups?msg={quote(msg)}", status_code=303)
+
+
+@router.post("/backups/upload/toolbox")
+async def backups_upload_toolbox(
+    user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+    config_file: UploadFile = File(...),
+    apply_now: str | None = Form(None),
+):
+    import json
+
+    from ..toolbox_backup_service import CONFIG_FORMAT, restore_toolbox_backup
+
+    raw = await config_file.read()
+    if not raw:
+        return RedirectResponse("/backups?err=Empty%20file", status_code=303)
+    try:
+        doc = json.loads(raw.decode("utf-8"))
+    except (UnicodeDecodeError, json.JSONDecodeError):
+        return RedirectResponse("/backups?err=Invalid%20JSON", status_code=303)
+    if doc.get("format") != CONFIG_FORMAT:
+        return RedirectResponse("/backups?err=Unsupported%20ToolBox%20config%20format", status_code=303)
+    row = create_toolbox_backup(db, user)
+    row.payload_json = json.dumps(doc, ensure_ascii=False)
+    db.commit()
+    db.refresh(row)
+    msg = f"Uploaded ToolBox config {row.name}"
+    if apply_now != "off":
+        try:
+            restore_toolbox_backup(db, user, row.id)
+            msg = f"{msg} and applied"
+        except Exception as e:
+            return RedirectResponse(f"/backups?err={quote(str(e))}", status_code=303)
+    return RedirectResponse(f"/backups?msg={quote(msg)}", status_code=303)
 
 
 @router.get("/backups/download/{backup_id}")

@@ -13,7 +13,7 @@
   <input type="hidden" name="slave_id" value="{{ s.id }}">
   <h2 class="footer-heading">{{ s.name or ('Target ' ~ s.id) }}</h2>
   <h3 class="footer-heading">Connection</h3>
-  {% with show_name_field=true, require_name=false, name=s.name, npm_host=row.npm_host, connect_host=row.connect_host, port_preset=row.port_preset, npm_port_custom=row.npm_port_custom, identity=s.identity, data_path=s.data_path, letsencrypt_path=s.letsencrypt_path, public_endpoint=s.public_endpoint, link_group=s.link_group, verify_tls=s.verify_tls, enabled=s.enabled, show_auto_pull=true, auto_pull=s.auto_pull %}
+  {% with show_name_field=true, require_name=false, name=s.name, npm_host=row.npm_host, connect_host=row.connect_host, port_preset=row.port_preset, npm_port_custom=row.npm_port_custom, identity=s.identity, data_path=s.data_path, letsencrypt_path=s.letsencrypt_path, public_endpoint=s.public_endpoint, link_group=s.link_group, verify_tls=s.verify_tls, enabled=s.enabled %}
   {% include "_npm_instance_form_fields.html" %}
   {% endwith %}
   <div class="row-actions">
@@ -30,7 +30,7 @@
 <form method="post" action="/slaves/save" class="card">
   <h2 class="footer-heading">Add another target</h2>
   <h3 class="footer-heading">Connection</h3>
-  {% with show_name_field=true, require_name=true, name='', npm_host='', connect_host='', port_preset='80', npm_port_custom='', identity='', data_path='', letsencrypt_path='', public_endpoint='', link_group='default', verify_tls=false, enabled=true, show_auto_pull=true, auto_pull=false %}
+  {% with show_name_field=true, require_name=true, name='', npm_host='', connect_host='', port_preset='80', npm_port_custom='', identity='', data_path='', letsencrypt_path='', public_endpoint='', link_group='default', verify_tls=false, enabled=true %}
   {% include "_npm_instance_form_fields.html" %}
   {% endwith %}
   <div class="row-actions">

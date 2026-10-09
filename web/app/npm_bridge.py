@@ -128,6 +128,44 @@ def npm_client_from_master(
     return client
 
 
+def npm_admin_host_for_slave(slave: SlaveInstance) -> str | None:
+    ah = (slave.admin_host or "").strip()
+    if ah:
+        return ah
+    parsed = urlparse(NpmClient.normalize_api_url(slave.api_url))
+    return (parsed.hostname or "").strip() or None
+
+
+def npm_client_from_slave(
+    slave: SlaveInstance,
+    *,
+    secret: str | None = None,
+    dns_servers: list[str] | None = None,
+    host_overrides: dict[str, str] | None = None,
+) -> NpmClient:
+    pw, err = resolve_secret(slave.password_enc, secret)
+    if err or not pw:
+        raise ValueError(err or f"Target password missing.")
+    if not slave.api_url.strip():
+        raise ValueError("Target API URL is not configured.")
+    try:
+        client = NpmClient(
+            slave.api_url,
+            identity=slave.identity,
+            secret=pw,
+            verify_tls=slave.verify_tls,
+            dns_servers=dns_servers,
+            host_overrides=host_overrides,
+            admin_host=npm_admin_host_for_slave(slave),
+        )
+        client.login()
+    except OSError as e:
+        raise ValueError(
+            _connection_error_message(slave.api_url, e, verify_tls=slave.verify_tls)
+        ) from e
+    return client
+
+
 def test_npm_connection(
     *,
     api_url: str,

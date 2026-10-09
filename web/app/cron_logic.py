@@ -8,7 +8,7 @@ from datetime import datetime, timezone
 from sqlalchemy.orm import Session
 
 from .backup_retention import AUTO_BACKUP_INTERVAL_MINUTES
-from .models import BackupSchedule, NpmBackupSettings, User, utcnow
+from .models import BackupSchedule, NpmBackupSettings, SyncSchedule, User, utcnow
 
 
 def _weekday_key(dt: datetime) -> str:
@@ -27,6 +27,20 @@ def user_due_for_scheduled_backup(db: Session, user: User, now: datetime | None 
     if last and (now - last).total_seconds() < interval * 60:
         return False
     return True
+
+
+def user_due_for_sync_schedule(db: Session, user: User, now: datetime | None = None) -> bool:
+    now = now or utcnow()
+    sched: SyncSchedule | None = user.sync_schedule
+    if not sched or not sched.enabled:
+        return False
+    if _weekday_key(now.astimezone(timezone.utc)) not in sched.get_days():
+        return False
+    interval = max(1, int(sched.interval_minutes or 1440))
+    last = sched.last_run_at
+    if last and (now - last).total_seconds() < interval * 60:
+        return False
+    return any(s.schedule_sync_enabled and s.enabled for s in user.slaves)
 
 
 def users_due_for_auto_backup(db: Session, now: datetime | None = None) -> list[User]:

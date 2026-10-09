@@ -144,6 +144,49 @@ class NpmClient:
             raise NpmError(f"GET {path} failed ({resp.status_code}): {resp.text[:500]}")
         return resp.json()
 
+    def _request_json(
+        self, method: str, path: str, *, json_body: dict | None = None
+    ) -> Any:
+        if not self._token:
+            self.login()
+        url = urljoin(self._request_root + "/", path.lstrip("/"))
+        hdrs = self._extra_headers()
+        resp = self._session.request(
+            method,
+            url,
+            json=json_body,
+            timeout=self.timeout,
+            verify=self._request_verify(),
+            headers=hdrs,
+        )
+        if resp.status_code == 401:
+            self._token = None
+            self.login()
+            resp = self._session.request(
+                method,
+                url,
+                json=json_body,
+                timeout=self.timeout,
+                verify=self._request_verify(),
+                headers=hdrs,
+            )
+        if resp.status_code >= 400:
+            raise NpmError(
+                f"{method} {path} failed ({resp.status_code}): {resp.text[:500]}"
+            )
+        if resp.status_code == 204 or not resp.content:
+            return None
+        return resp.json()
+
+    def _post_json(self, path: str, body: dict) -> Any:
+        return self._request_json("POST", path, json_body=body)
+
+    def _put_json(self, path: str, body: dict) -> Any:
+        return self._request_json("PUT", path, json_body=body)
+
+    def _delete_json(self, path: str) -> None:
+        self._request_json("DELETE", path)
+
     def probe_api(self) -> bool:
         """Return True if this host looks like NPM (tokens endpoint exists)."""
         url = urljoin(self._request_root + "/", "api/tokens")

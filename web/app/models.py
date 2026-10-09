@@ -37,6 +37,9 @@ class User(Base):
     master: Mapped[MasterInstance | None] = relationship(back_populates="user", uselist=False)
     slaves: Mapped[list[SlaveInstance]] = relationship(back_populates="user")
     schedule: Mapped[BackupSchedule | None] = relationship(back_populates="user", uselist=False)
+    sync_schedule: Mapped[SyncSchedule | None] = relationship(
+        back_populates="user", uselist=False
+    )
     run_logs: Mapped[list[BackupRunLog]] = relationship(back_populates="user")
     npm_backups: Mapped[list[NpmBackup]] = relationship(back_populates="user")
     toolbox_backups: Mapped[list[ToolBoxBackup]] = relationship(back_populates="user")
@@ -72,6 +75,8 @@ class MasterInstance(Base):
     verify_tls: Mapped[bool] = mapped_column(Boolean, default=False)
     enabled: Mapped[bool] = mapped_column(Boolean, default=True)
     link_group: Mapped[str] = mapped_column(String(128), default="default")
+    migrate_toolbox_url: Mapped[str] = mapped_column(String(512), default="")
+    migrate_ingest_token_enc: Mapped[str] = mapped_column(Text, default="")
 
     user: Mapped[User] = relationship(back_populates="master")
 
@@ -97,6 +102,9 @@ class SlaveInstance(Base):
     link_group: Mapped[str] = mapped_column(String(128), default="default")
     sort_order: Mapped[int] = mapped_column(Integer, default=0)
     auto_pull: Mapped[bool] = mapped_column(Boolean, default=False)
+    schedule_sync_enabled: Mapped[bool] = mapped_column(Boolean, default=False)
+    migrate_toolbox_url: Mapped[str] = mapped_column(String(512), default="")
+    migrate_ingest_token_enc: Mapped[str] = mapped_column(Text, default="")
 
     user: Mapped[User] = relationship(back_populates="slaves")
 
@@ -132,6 +140,32 @@ class RemotePullSource(Base):
     sort_order: Mapped[int] = mapped_column(Integer, default=0)
 
     user: Mapped[User] = relationship(back_populates="remote_sources")
+
+
+class SyncSchedule(Base):
+    __tablename__ = "sync_schedules"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    user_id: Mapped[int] = mapped_column(ForeignKey("users.id"), unique=True)
+    enabled: Mapped[bool] = mapped_column(Boolean, default=False)
+    interval_minutes: Mapped[int] = mapped_column(Integer, default=1440)
+    days_json: Mapped[str] = mapped_column(String(128), default='["mon","tue","wed","thu","fri","sat","sun"]')
+    last_run_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+    user: Mapped[User] = relationship(back_populates="sync_schedule")
+
+    def get_days(self) -> set[str]:
+        try:
+            data = json.loads(self.days_json)
+            if isinstance(data, list):
+                return {str(d).lower() for d in data if str(d).lower() in DAY_KEYS}
+        except json.JSONDecodeError:
+            pass
+        return set(DAY_KEYS)
+
+    def set_days(self, days: set[str]) -> None:
+        ordered = [d for d in DAY_KEYS if d in days]
+        self.days_json = json.dumps(ordered)
 
 
 class BackupSchedule(Base):

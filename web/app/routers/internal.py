@@ -3,7 +3,9 @@
 
 from __future__ import annotations
 
-from fastapi import APIRouter, Depends, File, Form, Header, HTTPException, UploadFile
+import json
+
+from fastapi import APIRouter, Body, Depends, File, Form, Header, HTTPException, UploadFile
 from fastapi.responses import FileResponse
 from sqlalchemy.orm import Session
 
@@ -12,6 +14,8 @@ from ..database import get_db
 from ..models import NpmBackup
 from ..npm_backup_service import backup_file_path
 from ..services import ensure_single_user, ingest_snapshot_file, run_cron_tick
+from ..toolbox_backup_service import CONFIG_FORMAT, build_toolbox_document, restore_toolbox_backup
+from ..models import ToolBoxBackup
 
 router = APIRouter()
 
@@ -96,3 +100,35 @@ def ingest_download(
     if not path.is_file():
         raise HTTPException(status_code=404, detail="File missing")
     return FileResponse(path, filename=row.file_name, media_type="application/zip")
+
+
+@router.post("/internal/ingest/toolbox-config")
+def ingest_toolbox_config(
+    payload: dict = Body(...),
+    db: Session = Depends(get_db),
+    authorization: str | None = Header(default=None),
+):
+    _require_ingest(authorization)
+    if payload.get("format") != CONFIG_FORMAT:
+        raise HTTPException(status_code=400, detail="Unsupported ToolBox config format.")
+    user = ensure_single_user(db)
+    row = ToolBoxBackup(
+        user_id=user.id,
+        name="ingest-toolbox-config",
+        payload_json=json.dumps(payload, ensure_ascii=False),
+    )
+    db.add(row)
+    db.commit()
+    db.refresh(row)
+    restore_toolbox_backup(db, user, row.id)
+    return {"ok": True}
+
+
+@router.get("/internal/ingest/toolbox-config/latest")
+def ingest_toolbox_latest(
+    db: Session = Depends(get_db),
+    authorization: str | None = Header(default=None),
+):
+    _require_ingest(authorization)
+    user = ensure_single_user(db)
+    return build_toolbox_document(user)
