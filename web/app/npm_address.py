@@ -7,6 +7,7 @@ import re
 from urllib.parse import urlparse
 
 PORT_PRESET_80 = "80"
+PORT_PRESET_81 = "81"
 PORT_PRESET_443 = "443"
 PORT_PRESET_CUSTOM = "custom"
 
@@ -30,6 +31,8 @@ def resolve_port(preset: str, custom_port: str) -> int:
     preset = (preset or "").strip().lower()
     if preset == PORT_PRESET_80:
         return 80
+    if preset == PORT_PRESET_81:
+        return 81
     if preset == PORT_PRESET_443:
         return 443
     if preset == PORT_PRESET_CUSTOM:
@@ -40,7 +43,7 @@ def resolve_port(preset: str, custom_port: str) -> int:
         if port < 1 or port > 65535:
             raise ValueError("Custom port must be a number between 1 and 65535.")
         return port
-    raise ValueError("Select a port (80, 443, or Custom).")
+    raise ValueError("Select a port (80, 81, 443, or Custom).")
 
 
 def scheme_for_port(port: int) -> str:
@@ -80,6 +83,8 @@ def parse_api_url(url: str) -> tuple[str, str, str]:
         port = 443 if parsed.scheme == "https" else 80
     if port == 80:
         return host, PORT_PRESET_80, ""
+    if port == 81:
+        return host, PORT_PRESET_81, ""
     if port == 443:
         return host, PORT_PRESET_443, ""
     return host, PORT_PRESET_CUSTOM, str(port)

@@ -14,6 +14,7 @@
 <label>Port
   <select name="port_preset" class="port-preset-select" required>
     <option value="80" {% if port_preset == '80' %}selected{% endif %}>Port 80</option>
+    <option value="81" {% if port_preset == '81' %}selected{% endif %}>Port 81</option>
     <option value="443" {% if port_preset == '443' %}selected{% endif %}>Port 443</option>
     <option value="custom" {% if port_preset == 'custom' %}selected{% endif %}>Custom</option>
   </select>
@@ -30,7 +31,7 @@
     placeholder="8080"
   >
 </label>
-<p class="muted small">Port <code>80</code> → <code>http://</code>. Port <code>443</code> → <code>https://</code>. Other custom ports → <code>http://</code>.</p>
+<p class="muted small">Port <code>80</code> or <code>81</code> → <code>http://</code>. Port <code>443</code> → <code>https://</code>. Other custom ports → <code>http://</code>.</p>
 
 <label>Connect via (optional)
   <input

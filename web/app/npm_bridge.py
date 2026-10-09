@@ -230,7 +230,7 @@ def apply_candidate_to_master(master: MasterInstance, candidate) -> None:
     if candidate.admin_port and not master.api_url.strip():
         port = (candidate.admin_port or "").strip()
         host = "127.0.0.1"
-        if port in ("80", "443"):
+        if port in ("80", "81", "443"):
             master.api_url = build_api_url_from_form(host, port, "")
         elif port.isdigit():
             master.api_url = build_api_url_from_form(host, PORT_PRESET_CUSTOM, port)
@@ -248,7 +248,7 @@ def apply_candidate_to_slave(slave: SlaveInstance, candidate) -> None:
 
         port = (candidate.admin_port or "").strip()
         host = "127.0.0.1"
-        if port in ("80", "443"):
+        if port in ("80", "81", "443"):
             slave.api_url = build_api_url_from_form(host, port, "")
         elif port.isdigit():
             slave.api_url = build_api_url_from_form(host, PORT_PRESET_CUSTOM, port)
