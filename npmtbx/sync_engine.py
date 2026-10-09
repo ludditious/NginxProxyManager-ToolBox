@@ -7,7 +7,7 @@ import json
 from copy import deepcopy
 from typing import Any
 
-from .cert_pem_io import load_certificate_pem, pem_lookup_hint
+from .cert_pem_io import export_is_letsencrypt, load_certificate_pem, pem_lookup_hint
 from .client import NpmClient, NpmError
 from .npm_create_payloads import (
     build_create_payload,
@@ -310,6 +310,7 @@ def _sync_certificates(
     source_data_path: str = "",
     source_letsencrypt_path: str = "",
     source_docker_container_id: str = "",
+    source_client: NpmClient | None = None,
 ) -> dict[int, int]:
     """Create or preserve certificates; map source cert id → target cert id."""
     target_by_domains: dict[tuple[str, ...], dict[str, Any]] = {}
@@ -332,11 +333,12 @@ def _sync_certificates(
         domain_key = _cert_domain_key(item)
         label = item.get("nice_name") or item.get("name") or ",".join(domain_key) or "?"
 
-        pem = load_certificate_pem(
+        pem, pem_via = load_certificate_pem(
             item,
             data_path=source_data_path,
             letsencrypt_path=source_letsencrypt_path,
             docker_container_id=source_docker_container_id,
+            source_client=source_client,
         )
         if pem:
             cert_pem, key_pem = pem
@@ -356,7 +358,7 @@ def _sync_certificates(
                 if source_id_int is not None:
                     id_map[source_id_int] = target_id
                 copied += 1
-                lines.append(f"Copied SSL certificate files for {label}")
+                lines.append(f"Installed SSL for {label} ({pem_via})")
             continue
 
         payload = _npm_openapi_certificate_payload(item)
@@ -377,9 +379,12 @@ def _sync_certificates(
                     letsencrypt_path=source_letsencrypt_path,
                     docker_container_id=source_docker_container_id,
                 )
+                api_note = ""
+                if source_client is not None and export_is_letsencrypt(item):
+                    api_note = "; Source download API had no PEM either"
                 lines.append(
                     f"Skipped certificate {label}: {reason} "
-                    f"(no PEM on disk; {hint})"
+                    f"(no PEM found; {hint}{api_note})"
                 )
                 existing = target_by_domains.get(domain_key) if domain_key else None
                 if existing and existing.get("id") is not None and source_id_int:
@@ -476,6 +481,7 @@ def apply_export_to_target(
     source_data_path: str = "",
     source_letsencrypt_path: str = "",
     source_docker_container_id: str = "",
+    source_client: NpmClient | None = None,
 ) -> list[str]:
     """Replace target NPM API objects with data from a source export dict."""
     lines: list[str] = []
@@ -517,6 +523,7 @@ def apply_export_to_target(
                 source_data_path=source_data_path,
                 source_letsencrypt_path=source_letsencrypt_path,
                 source_docker_container_id=source_docker_container_id,
+                source_client=source_client,
             )
             continue
         if key == "access-lists":

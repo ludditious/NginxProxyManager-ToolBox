@@ -3,6 +3,8 @@
 
 from __future__ import annotations
 
+import io
+import zipfile
 from typing import Any
 from urllib.parse import urljoin, urlparse
 
@@ -250,6 +252,69 @@ class NpmClient:
 
     def _delete_json(self, path: str) -> None:
         self._request_json("DELETE", path)
+
+    @staticmethod
+    def _pem_pair_from_zip(data: bytes) -> tuple[str, str] | None:
+        if not data or not data.startswith(b"PK"):
+            return None
+        try:
+            with zipfile.ZipFile(io.BytesIO(data)) as zf:
+                names = zf.namelist()
+                chain_name = next(
+                    (n for n in names if n.rstrip("/").endswith("fullchain.pem")),
+                    None,
+                )
+                key_name = next(
+                    (n for n in names if n.rstrip("/").endswith("privkey.pem")),
+                    None,
+                )
+                if not chain_name or not key_name:
+                    return None
+                chain = zf.read(chain_name).decode("utf-8", errors="replace").strip()
+                key = zf.read(key_name).decode("utf-8", errors="replace").strip()
+                if "BEGIN CERTIFICATE" in chain and "BEGIN" in key:
+                    return chain, key
+        except (zipfile.BadZipFile, OSError, KeyError):
+            return None
+        return None
+
+    def download_letsencrypt_pem(self, cert_id: int) -> tuple[str, str] | None:
+        """
+        GET /api/nginx/certificates/{id}/download — NPM zips live PEMs on the Source host.
+        Works when ToolBox only has API access (no local volume paths).
+        """
+        if not self._token:
+            self.login()
+        path = f"/api/nginx/certificates/{int(cert_id)}/download"
+        url = urljoin(self._request_root + "/", path.lstrip("/"))
+        hdrs = self._extra_headers()
+        try:
+            resp = self._session.get(
+                url,
+                timeout=self.timeout,
+                verify=self._request_verify(),
+                headers=hdrs,
+                stream=True,
+            )
+        except requests.RequestException:
+            return None
+        if resp.status_code == 401:
+            self._token = None
+            self.login()
+            try:
+                resp = self._session.get(
+                    url,
+                    timeout=self.timeout,
+                    verify=self._request_verify(),
+                    headers=hdrs,
+                    stream=True,
+                )
+            except requests.RequestException:
+                return None
+        if resp.status_code >= 400:
+            return None
+        content = resp.content
+        return self._pem_pair_from_zip(content)
 
     def probe_api(self) -> bool:
         """Return True if this host looks like NPM (tokens endpoint exists)."""

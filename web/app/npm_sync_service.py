@@ -36,6 +36,7 @@ def sync_source_to_target(db: Session, user: User, slave_id: int) -> list[str]:
         source_data_path=(master.data_path or "").strip(),
         source_letsencrypt_path=(master.letsencrypt_path or "").strip(),
         source_docker_container_id=(master.docker_container_id or "").strip(),
+        source_client=source,
     )
     lines.insert(0, f"Synced Source → {slave.name or slave.id}")
     return lines

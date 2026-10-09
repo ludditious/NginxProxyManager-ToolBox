@@ -71,6 +71,13 @@ def pem_from_docker_container(container_id: str, cert_id: int) -> tuple[str, str
     )
     if pair:
         return pair
+    custom = f"/data/custom_ssl/npm-{cert_num}"
+    pair = _pem_pair(
+        _read_pem_from_container(container, f"{custom}/fullchain.pem"),
+        _read_pem_from_container(container, f"{custom}/privkey.pem"),
+    )
+    if pair:
+        return pair
     try:
         listed = container.exec_run(
             [
@@ -131,31 +138,48 @@ def pem_from_npm_data_paths(
     return None
 
 
+def export_is_letsencrypt(item: dict[str, Any]) -> bool:
+    if item.get("provider") == "letsencrypt":
+        return True
+    return str(item.get("type") or "").strip().lower() in ("http", "dns")
+
+
 def load_certificate_pem(
     item: dict[str, Any],
     *,
     data_path: str,
     letsencrypt_path: str,
     docker_container_id: str = "",
-) -> tuple[str, str] | None:
+    source_client: Any | None = None,
+) -> tuple[tuple[str, str] | None, str]:
+    """
+    Returns (pem_pair, method_label). method_label is empty when not found.
+    """
     from_meta = pem_from_meta(item.get("meta"))
     if from_meta:
-        return from_meta
+        return from_meta, "export meta"
     cid = item.get("id")
     if cid is None:
-        return None
+        return None, ""
     try:
         cert_id = int(cid)
     except (TypeError, ValueError):
-        return None
+        return None, ""
+    if source_client is not None and export_is_letsencrypt(item):
+        from_api = source_client.download_letsencrypt_pem(cert_id)
+        if from_api:
+            return from_api, "Source NPM download API"
     from_paths = pem_from_npm_data_paths(
         cert_id=cert_id,
         data_path=data_path,
         letsencrypt_path=letsencrypt_path,
     )
     if from_paths:
-        return from_paths
-    return pem_from_docker_container(docker_container_id, cert_id)
+        return from_paths, "Source volume paths"
+    from_docker = pem_from_docker_container(docker_container_id, cert_id)
+    if from_docker:
+        return from_docker, "Source Docker container"
+    return None, ""
 
 
 def pem_lookup_hint(
