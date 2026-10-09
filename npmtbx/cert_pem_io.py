@@ -4,7 +4,7 @@
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Any
+from typing import Any  # container handle from docker SDK
 
 
 def _read_pem_file(path: Path) -> str | None:
@@ -36,6 +36,61 @@ def pem_from_meta(meta: Any) -> tuple[str, str] | None:
     if "BEGIN CERTIFICATE" in cert_s and "BEGIN" in key_s:
         return cert_s, key_s
     return None
+
+
+def _read_pem_from_container(container: Any, path: str) -> str | None:
+    try:
+        result = container.exec_run(["cat", path])
+    except Exception:
+        return None
+    if getattr(result, "exit_code", 1) != 0:
+        return None
+    raw = getattr(result, "output", b"") or b""
+    text = raw.decode("utf-8", errors="replace").strip()
+    return text if "BEGIN" in text else None
+
+
+def pem_from_docker_container(container_id: str, cert_id: int) -> tuple[str, str] | None:
+    """Read cert material from a running NPM container (requires Docker socket in ToolBox)."""
+    cid = (container_id or "").strip()
+    if not cid:
+        return None
+    try:
+        import docker
+    except ImportError:
+        return None
+    try:
+        container = docker.from_env().containers.get(cid)
+    except Exception:
+        return None
+    cert_num = int(cert_id)
+    live = f"/etc/letsencrypt/live/npm-{cert_num}"
+    pair = _pem_pair(
+        _read_pem_from_container(container, f"{live}/fullchain.pem"),
+        _read_pem_from_container(container, f"{live}/privkey.pem"),
+    )
+    if pair:
+        return pair
+    try:
+        listed = container.exec_run(
+            [
+                "sh",
+                "-c",
+                f"ls -d /data/certificates/{cert_num}-* 2>/dev/null | head -n 1",
+            ]
+        )
+        if listed.exit_code != 0:
+            return None
+        folder = (listed.output or b"").decode("utf-8", errors="replace").strip()
+        if not folder:
+            return None
+        return _pem_pair(
+            _read_pem_from_container(container, f"{folder}/fullchain.pem"),
+            _read_pem_from_container(container, f"{folder}/privkey.pem")
+            or _read_pem_from_container(container, f"{folder}/key.pem"),
+        )
+    except Exception:
+        return None
 
 
 def pem_from_npm_data_paths(
@@ -81,6 +136,7 @@ def load_certificate_pem(
     *,
     data_path: str,
     letsencrypt_path: str,
+    docker_container_id: str = "",
 ) -> tuple[str, str] | None:
     from_meta = pem_from_meta(item.get("meta"))
     if from_meta:
@@ -92,8 +148,32 @@ def load_certificate_pem(
         cert_id = int(cid)
     except (TypeError, ValueError):
         return None
-    return pem_from_npm_data_paths(
+    from_paths = pem_from_npm_data_paths(
         cert_id=cert_id,
         data_path=data_path,
         letsencrypt_path=letsencrypt_path,
     )
+    if from_paths:
+        return from_paths
+    return pem_from_docker_container(docker_container_id, cert_id)
+
+
+def pem_lookup_hint(
+    *,
+    data_path: str,
+    letsencrypt_path: str,
+    docker_container_id: str,
+) -> str:
+    parts: list[str] = []
+    if data_path.strip():
+        parts.append(f"data path {data_path.strip()!r}")
+    if letsencrypt_path.strip():
+        parts.append(f"LE path {letsencrypt_path.strip()!r}")
+    if docker_container_id.strip():
+        parts.append(f"Docker container {docker_container_id.strip()!r}")
+    if not parts:
+        return (
+            "configure Source data + Let's Encrypt paths, or use Docker detect on "
+            "Source (ToolBox needs /var/run/docker.sock to read certs from the NPM container)"
+        )
+    return "checked " + ", ".join(parts)

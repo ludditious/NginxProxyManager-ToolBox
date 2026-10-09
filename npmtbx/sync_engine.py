@@ -7,7 +7,7 @@ import json
 from copy import deepcopy
 from typing import Any
 
-from .cert_pem_io import load_certificate_pem
+from .cert_pem_io import load_certificate_pem, pem_lookup_hint
 from .client import NpmClient, NpmError
 from .npm_create_payloads import (
     build_create_payload,
@@ -309,6 +309,7 @@ def _sync_certificates(
     *,
     source_data_path: str = "",
     source_letsencrypt_path: str = "",
+    source_docker_container_id: str = "",
 ) -> dict[int, int]:
     """Create or preserve certificates; map source cert id → target cert id."""
     target_by_domains: dict[tuple[str, ...], dict[str, Any]] = {}
@@ -335,6 +336,7 @@ def _sync_certificates(
             item,
             data_path=source_data_path,
             letsencrypt_path=source_letsencrypt_path,
+            docker_container_id=source_docker_container_id,
         )
         if pem:
             cert_pem, key_pem = pem
@@ -364,12 +366,24 @@ def _sync_certificates(
             ok, reason = _letsencrypt_create_allowed(meta)
             if not ok:
                 skipped += 1
-                if not source_data_path.strip() and not source_letsencrypt_path.strip():
+                if (
+                    not source_data_path.strip()
+                    and not source_letsencrypt_path.strip()
+                    and not source_docker_container_id.strip()
+                ):
                     paths_hint = True
+                hint = pem_lookup_hint(
+                    data_path=source_data_path,
+                    letsencrypt_path=source_letsencrypt_path,
+                    docker_container_id=source_docker_container_id,
+                )
+                lines.append(
+                    f"Skipped certificate {label}: {reason} "
+                    f"(no PEM on disk; {hint})"
+                )
                 existing = target_by_domains.get(domain_key) if domain_key else None
                 if existing and existing.get("id") is not None and source_id_int:
                     id_map[source_id_int] = int(existing["id"])
-                lines.append(f"Skipped certificate {label}: {reason}")
                 continue
 
         existing = target_by_domains.get(domain_key) if domain_key else None
@@ -389,8 +403,9 @@ def _sync_certificates(
     )
     if paths_hint:
         lines.append(
-            "Tip: set Source NPM data path and Let's Encrypt path on the Source page "
-            "so sync can copy existing SSL files (API does not export private keys)."
+            "Tip: on Source, set NPM data + Let's Encrypt folder paths (host bind mounts), "
+            "or use Docker detect and save — ToolBox needs docker.sock to read certs from "
+            "the NPM container when paths are not mounted into ToolBox."
         )
     return id_map
 
@@ -460,6 +475,7 @@ def apply_export_to_target(
     *,
     source_data_path: str = "",
     source_letsencrypt_path: str = "",
+    source_docker_container_id: str = "",
 ) -> list[str]:
     """Replace target NPM API objects with data from a source export dict."""
     lines: list[str] = []
@@ -500,6 +516,7 @@ def apply_export_to_target(
                 lines,
                 source_data_path=source_data_path,
                 source_letsencrypt_path=source_letsencrypt_path,
+                source_docker_container_id=source_docker_container_id,
             )
             continue
         if key == "access-lists":
