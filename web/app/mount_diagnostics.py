@@ -17,11 +17,23 @@ def _norm_host_path(path: str) -> str:
     return os.path.normpath((path or "").strip())
 
 
+def _is_host_folder_bind_source(src: str) -> bool:
+    s = (src or "").strip()
+    if not s.startswith("/"):
+        return False
+    if s.startswith(("/dev/", "/proc", "/sys", "/run/docker")):
+        return False
+    if "overlay" in s or s == "tmpfs" or s.endswith("shm"):
+        return False
+    return True
+
+
 def toolbox_bind_source(mount_point: str) -> str | None:
-    """Host source path for a bind mount visible inside this container (/proc/mounts)."""
+    """Host folder bind-mounted at mount_point inside this container (/proc/mounts)."""
     target = _norm_host_path(mount_point)
     if target == "/":
         return None
+    exact: str | None = None
     best_src: str | None = None
     best_len = -1
     try:
@@ -33,15 +45,17 @@ def toolbox_bind_source(mount_point: str) -> str | None:
                 src = parts[0].replace("\\040", " ")
                 dest = parts[1].replace("\\040", " ")
                 dest_norm = _norm_host_path(dest)
-                if target == dest_norm or target.startswith(dest_norm + os.sep):
+                if not _is_host_folder_bind_source(src):
+                    continue
+                if dest_norm == target:
+                    exact = src
+                elif dest_norm != "/" and target.startswith(dest_norm + os.sep):
                     if len(dest_norm) > best_len:
                         best_len = len(dest_norm)
                         best_src = src
     except OSError:
         return None
-    if best_src and best_src.startswith("/"):
-        return best_src
-    return None
+    return exact or best_src
 
 
 def _dir_size_bytes(path: Path) -> int:
@@ -86,20 +100,31 @@ class MountDiagnostic:
     ready_for_disk_backup: bool
     docker_socket_available: bool
     can_try_docker_export: bool
+    stale_container_link: bool = False
 
     def report_lines(self) -> list[str]:
+        if self.npm_container_name:
+            npm_line = f"{self.npm_container_name} ({self.npm_container_id[:12]})"
+        elif self.npm_container_id:
+            npm_line = f"stale/unknown id {self.npm_container_id[:12]} — use detect + Save to relink"
+        else:
+            npm_line = "none — detect NPM on this page and Save"
         lines = [
-            f"NPM container: {self.npm_container_name or '(none linked)'} ({self.npm_container_id[:12] or '—'})",
-            f"NPM /data on Docker host: {self.npm_data_host or '(unknown — link NPM container)'}",
+            f"NPM container: {npm_line}",
+            f"NPM /data on Docker host: {self.npm_data_host or '(detect NPM container with docker.sock)'}",
             f"ToolBox path {self.toolbox_data_path!r} → host: {self.toolbox_data_host or self.toolbox_data_host_note}",
             f"{NPM_DATA_MARKER} visible in ToolBox: {'yes' if self.sqlite_present else 'NO'}",
             f"Size ToolBox sees under {self.toolbox_data_path}: {self._human_bytes(self.toolbox_data_bytes)}",
         ]
+        if self.stale_container_link:
+            lines.append("Saved container id does not match detected NPM — click Save after detect.")
         if self.npm_data_host and self.toolbox_data_host:
             lines.append(
                 "Host /data paths match: "
                 + ("yes" if self.host_data_paths_match else "NO — backup would not read NPM data")
             )
+        elif self.npm_data_host and not self.toolbox_data_host:
+            lines.append("Host /data paths match: NO — ToolBox /npm-data is not bind-mounted to that folder")
         if not self.ready_for_disk_backup:
             if self.npm_data_host and not self.host_data_paths_match:
                 lines.append(
@@ -168,32 +193,53 @@ def diagnose_local_npm_mounts(
 ) -> MountDiagnostic:
     data_path = (local.data_path if local else "").strip() or DEFAULT_DATA_PATH
     le_path = (local.letsencrypt_path if local else "").strip() or DEFAULT_LETSENCRYPT_PATH
-    cid = (local.docker_container_id if local else "").strip()
+    saved_cid = (local.docker_container_id if local else "").strip()
+    cid = saved_cid
     cname = ""
     npm_data_host = ""
     npm_le_host = ""
+    stale_link = False
+
+    def _id_matches(a: str, b: str) -> bool:
+        a = (a or "").strip()
+        b = (b or "").strip()
+        if not a or not b:
+            return False
+        return a == b or a.startswith(b[:12]) or b.startswith(a[:12])
 
     if cid:
         try:
             import docker
 
             container = docker.from_env().containers.get(cid)
-            cname = (container.name or "").strip()
+            cname = (container.name or "").strip().lstrip("/")
             mounts = container_mount_host_paths(cid)
             npm_data_host = mounts.get("/data", "")
             npm_le_host = mounts.get("/etc/letsencrypt", "")
         except Exception:
             pass
 
-    if not npm_data_host and candidates:
-        for c in candidates:
-            if c.data_path and (not cid or c.container_id == cid):
-                npm_data_host = c.data_path
-                npm_le_host = c.letsencrypt_path or npm_le_host
-                cname = cname or c.name
-                if not cid:
-                    cid = c.container_id
-                break
+    pick: NpmCandidate | None = None
+    if candidates:
+        if cid:
+            for c in candidates:
+                if _id_matches(c.container_id, cid):
+                    pick = c
+                    break
+        if not pick:
+            for c in candidates:
+                if c.data_path:
+                    pick = c
+                    break
+    if pick:
+        if pick.data_path:
+            npm_data_host = npm_data_host or pick.data_path
+        if pick.letsencrypt_path:
+            npm_le_host = npm_le_host or pick.letsencrypt_path
+        cname = cname or pick.name
+        if saved_cid and not _id_matches(pick.container_id, saved_cid):
+            stale_link = True
+        cid = pick.container_id
 
     tb_data_host = toolbox_bind_source(data_path)
     tb_le_host = toolbox_bind_source(le_path)
@@ -232,4 +278,5 @@ def diagnose_local_npm_mounts(
         ready_for_disk_backup=ready,
         docker_socket_available=sock,
         can_try_docker_export=export_ok,
+        stale_container_link=stale_link,
     )
