@@ -4,6 +4,8 @@
 
 set -eu
 
+export DOCKER_HOST="${DOCKER_HOST:-unix:///var/run/docker.sock}"
+
 mkdir -p /data /data/backups /var/log
 chmod +x /app/web/cron/cron-tick.sh
 

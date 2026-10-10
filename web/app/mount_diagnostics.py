@@ -114,6 +114,7 @@ class MountDiagnostic:
     ready_for_disk_backup: bool
     ready_for_docker_backup: bool
     docker_socket_available: bool
+    docker_status_detail: str
     stale_container_link: bool = False
 
     @property
@@ -150,9 +151,9 @@ class MountDiagnostic:
                 "Same-host mode: ToolBox can read/write NPM /data via docker.sock (no /npm-data bind required)."
             )
         elif not self.docker_socket_available:
-            lines.append(
-                "Add -v /var/run/docker.sock:/var/run/docker.sock:ro to ToolBox, or bind NPM /data into /npm-data."
-            )
+            detail = self.docker_status_detail or "unknown error"
+            lines.append(f"Docker: {detail}")
+            lines.append("Fix ToolBox run: -v /var/run/docker.sock:/var/run/docker.sock:ro")
         elif not self.npm_data_host:
             lines.append("Link NPM container (auto-detect on this page) so ToolBox knows which container to use.")
         if self.ready_for_disk_backup:
@@ -180,14 +181,31 @@ class MountDiagnostic:
         raise ValueError("Restore blocked.\n" + "\n".join(self.report_lines()))
 
 
-def _docker_available() -> bool:
+def _docker_status() -> tuple[bool, str]:
+    sock_path = Path("/var/run/docker.sock")
+    if not sock_path.exists():
+        return False, "/var/run/docker.sock not present (not mounted into ToolBox)"
+    if not sock_path.is_socket():
+        return False, "/var/run/docker.sock exists but is not a socket"
+    last_err = ""
+    for base_url in ("unix:///var/run/docker.sock",):
+        try:
+            import docker
+
+            client = docker.DockerClient(base_url=base_url)
+            client.ping()
+            client.containers.list(limit=1)
+            return True, "connected"
+        except Exception as exc:
+            last_err = str(exc)
     try:
         import docker
 
         docker.from_env().ping()
-        return True
-    except Exception:
-        return False
+        return True, "connected"
+    except Exception as exc:
+        last_err = last_err or str(exc)
+    return False, last_err or "cannot connect to Docker"
 
 
 def diagnose_local_npm_mounts(
@@ -261,7 +279,7 @@ def diagnose_local_npm_mounts(
     le_norm_t = _norm_host_path(tb_le_host) if tb_le_host else ""
     match_le = bool(le_norm_n and le_norm_t and le_norm_n == le_norm_t) or (not le_norm_n and not le_norm_t)
 
-    sock = _docker_available()
+    sock, sock_detail = _docker_status()
     ready_disk = sqlite and match_data and tb_bytes > 4096
     ready_docker = sock and bool(cid) and bool(npm_data_host)
 
@@ -281,5 +299,6 @@ def diagnose_local_npm_mounts(
         ready_for_disk_backup=ready_disk,
         ready_for_docker_backup=ready_docker,
         docker_socket_available=sock,
+        docker_status_detail=sock_detail,
         stale_container_link=stale_link,
     )
