@@ -38,15 +38,29 @@ def _tar_gz_has_files(tar_gz: Path) -> bool:
         return False
 
 
-def _archive_from_container(container_id: str, container_path: str, dest_tar_gz: Path) -> bool:
+def _container_ids_to_try(primary: str, extras: list[str] | None) -> list[str]:
+    seen: set[str] = set()
+    out: list[str] = []
+    for raw in [primary, *(extras or [])]:
+        cid = (raw or "").strip()
+        if cid and cid not in seen:
+            seen.add(cid)
+            out.append(cid)
+    return out
+
+
+def _archive_from_container(container_id: str, container_path: str, dest_tar_gz: Path) -> tuple[bool, str]:
+    cid = container_id.strip()
+    if not cid:
+        return False, "no container id"
     try:
         import docker
 
-        container = docker.from_env().containers.get(container_id.strip())
+        container = docker.from_env().containers.get(cid)
         stream, _ = container.get_archive(container_path)
         raw_tar = b"".join(stream)
         if not raw_tar:
-            return False
+            return False, f"empty archive from {container_path}"
         dest_tar_gz.parent.mkdir(parents=True, exist_ok=True)
         with tempfile.NamedTemporaryFile(delete=False, suffix=".tar") as tmp:
             tmp.write(raw_tar)
@@ -58,10 +72,13 @@ def _archive_from_container(container_id: str, container_path: str, dest_tar_gz:
                     dest.addfile(member, extracted)
         finally:
             tmp_path.unlink(missing_ok=True)
-        return _tar_gz_has_files(dest_tar_gz)
-    except Exception:
+        if _tar_gz_has_files(dest_tar_gz):
+            return True, ""
         dest_tar_gz.unlink(missing_ok=True)
-        return False
+        return False, f"archive from {container_path} had no files"
+    except Exception as exc:
+        dest_tar_gz.unlink(missing_ok=True)
+        return False, str(exc)
 
 
 def _add_tree_to_tar(tar: tarfile.TarFile, source: Path, arcname: str) -> None:
@@ -97,12 +114,15 @@ def create_snapshot_zip(
     letsencrypt_path: str,
     docker_image: str = "",
     docker_container_id: str = "",
+    docker_container_ids: list[str] | None = None,
     include_volumes: bool = True,
     include_docker_inspect: bool = False,
 ) -> dict[str, Any]:
     snapshot_id = uuid.uuid4().hex
     dest_zip.parent.mkdir(parents=True, exist_ok=True)
     volume_files: dict[str, str] = {}
+    archive_notes: list[str] = []
+    container_ids = _container_ids_to_try(docker_container_id, docker_container_ids)
 
     with tempfile.TemporaryDirectory(prefix="npmtbx-snap-") as tmp:
         tmp_path = Path(tmp)
@@ -123,23 +143,36 @@ def create_snapshot_zip(
             le_src = Path(letsencrypt_path).expanduser()
             data_tar = vol_dir / "data.tar.gz"
             le_tar = vol_dir / "letsencrypt.tar.gz"
-            cid = docker_container_id.strip()
+            data_ok = False
             if data_src.exists() and _path_has_npm_data(data_src):
                 _archive_directory(data_src, data_tar)
-            elif cid:
-                _archive_from_container(cid, "/data", data_tar)
-            if _tar_gz_has_files(data_tar):
+                data_ok = _tar_gz_has_files(data_tar)
+            if not data_ok:
+                for cid in container_ids:
+                    ok, err = _archive_from_container(cid, "/data", data_tar)
+                    if ok:
+                        data_ok = True
+                        break
+                    archive_notes.append(f"container {cid[:12]} /data: {err}")
+            if data_ok:
                 volume_files["data"] = "volumes/data.tar.gz"
             else:
                 data_tar.unlink(missing_ok=True)
 
+            le_ok = False
             if le_src.exists() and any(
                 f.is_file() and f.stat().st_size > 0 for f in le_src.rglob("*")
             ):
                 _archive_directory(le_src, le_tar)
-            elif cid:
-                _archive_from_container(cid, "/etc/letsencrypt", le_tar)
-            if _tar_gz_has_files(le_tar):
+                le_ok = _tar_gz_has_files(le_tar)
+            if not le_ok:
+                for cid in container_ids:
+                    ok, err = _archive_from_container(cid, "/etc/letsencrypt", le_tar)
+                    if ok:
+                        le_ok = True
+                        break
+                    archive_notes.append(f"container {cid[:12]} certs: {err}")
+            if le_ok:
                 volume_files["letsencrypt"] = "volumes/letsencrypt.tar.gz"
             else:
                 le_tar.unlink(missing_ok=True)
@@ -171,6 +204,8 @@ def create_snapshot_zip(
             npm_api_export=api_export,
             volume_files=volume_files,
         )
+        if archive_notes:
+            manifest["archive_notes"] = archive_notes
         (tmp_path / "manifest.json").write_text(
             json.dumps(manifest, ensure_ascii=False, indent=2),
             encoding="utf-8",

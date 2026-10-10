@@ -21,6 +21,11 @@ from npmtbx.sync_engine import apply_export_to_target
 from .config import get_settings
 from .docker_control import restart_container, stop_container
 from .local_volume_paths import apply_mount_defaults, validate_full_backup_paths
+from .npm_full_backup_prep import (
+    container_ids_for_archive,
+    mount_hint_from_candidates,
+    prepare_local_for_full_backup,
+)
 from .models import LocalNpmBackup, MasterInstance, NpmBackup, SlaveInstance, User, utcnow
 from .npm_bridge import (
     npm_client_from_local,
@@ -59,11 +64,17 @@ def create_npm_backup(
     stamp = when.strftime("%Y-%m-%d-%H%M%S")
     container_label = (local.docker_container_id or "npm")[:12]
 
+    discover_err: str | None = None
+    docker_candidates = []
+    extra_container_ids: list[str] = []
     if backup_kind == "full":
         if apply_mount_defaults(local):
             db.add(local)
             db.commit()
             db.refresh(local)
+        docker_candidates, discover_err = prepare_local_for_full_backup(db, local)
+        extra_container_ids = container_ids_for_archive(local, docker_candidates)
+        container_label = (local.docker_container_id or container_label)[:12]
         validate_full_backup_paths(local.data_path, local.letsencrypt_path)
         include_api = False
         include_volumes = True
@@ -91,6 +102,7 @@ def create_npm_backup(
         letsencrypt_path=local.letsencrypt_path,
         docker_image=local.docker_image,
         docker_container_id=local.docker_container_id,
+        docker_container_ids=extra_container_ids if backup_kind == "full" else None,
         include_volumes=include_volumes,
         include_docker_inspect=backup_kind == "full",
     )
@@ -100,12 +112,17 @@ def create_npm_backup(
         if not volumes.get("data"):
             if zip_path.is_file():
                 zip_path.unlink()
-            raise ValueError(
-                "Backup failed: no NPM /data was archived. "
-                f"Path {local.data_path!r} is empty or not NPM's data folder (expect database.sqlite). "
-                "Bind-mount the same host directory NPM uses for /data (e.g. -v …/npm/data:/npm-data), "
-                "or Save with a detected NPM container so ToolBox can read /data via Docker."
-            )
+            parts = [
+                "Backup failed: no NPM /data was archived.",
+                f"ToolBox path {local.data_path!r} is empty or not NPM data (expect database.sqlite).",
+                mount_hint_from_candidates(docker_candidates),
+            ]
+            if discover_err:
+                parts.append(discover_err)
+            notes = manifest.get("archive_notes") or []
+            if notes:
+                parts.append("Docker export: " + "; ".join(notes[:4]))
+            raise ValueError(" ".join(parts))
         min_bytes = 4096
         zip_size = zip_path.stat().st_size
         if zip_size < min_bytes:
