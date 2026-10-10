@@ -19,7 +19,7 @@ from npmtbx.snapshot import (
 from npmtbx.sync_engine import apply_export_to_target
 
 from .config import get_settings
-from .docker_control import restart_container, stop_container
+from .docker_control import restart_container, start_container, stop_container
 from .local_volume_paths import apply_mount_defaults, validate_full_backup_paths
 from .npm_full_backup_prep import (
     container_ids_for_archive,
@@ -207,24 +207,63 @@ def restore_npm_snapshot(
             raise ValueError("Backup includes /data but local data path is not configured.")
         if has_le and not le_path:
             raise ValueError("Backup includes certificates but local certificates path is not configured.")
+        if has_data:
+            from npmtbx.snapshot import validate_volume_member_for_restore
+
+            validate_volume_member_for_restore(
+                zip_path, "volumes/data.tar.gz", require_npm_data=True
+            )
+        if row.size_bytes > 0 and row.size_bytes < 4096:
+            raise ValueError(
+                f"This backup file is only {row.size_bytes} bytes — too small to restore safely."
+            )
+
         container_id = (inst.docker_container_id or "").strip()
-        if container_id:
-            try:
-                stop_container(container_id)
-                lines.append(f"Stopped NPM container {container_id[:12]}")
-            except Exception as e:
-                lines.append(f"Warning: could not stop container before restore ({e})")
-        if has_data and data_path:
-            extract_volume_member(zip_path, "volumes/data.tar.gz", Path(data_path), clear_dest=True)
-            lines.append(f"Restored NPM /data to {data_path}")
-        if has_le and le_path:
-            extract_volume_member(zip_path, "volumes/letsencrypt.tar.gz", Path(le_path), clear_dest=True)
-            lines.append(f"Restored /etc/letsencrypt to {le_path}")
+        stopped = False
+        try:
+            if container_id:
+                try:
+                    stop_container(container_id)
+                    stopped = True
+                    lines.append(f"Stopped NPM container {container_id[:12]}")
+                except Exception as e:
+                    lines.append(f"Warning: could not stop container before restore ({e})")
+            if has_data and data_path:
+                extract_volume_member(
+                    zip_path,
+                    "volumes/data.tar.gz",
+                    Path(data_path),
+                    clear_dest=True,
+                    require_npm_data=True,
+                )
+                lines.append(f"Restored NPM /data to {data_path}")
+            if has_le and le_path:
+                extract_volume_member(
+                    zip_path,
+                    "volumes/letsencrypt.tar.gz",
+                    Path(le_path),
+                    clear_dest=True,
+                    require_npm_data=False,
+                )
+                lines.append(f"Restored /etc/letsencrypt to {le_path}")
+        except Exception:
+            if container_id and stopped:
+                try:
+                    lines.append(start_container(container_id))
+                except Exception as start_err:
+                    lines.append(
+                        f"Restore failed and NPM may be stopped — run docker start on the "
+                        f"NPM container manually ({start_err})"
+                    )
+            raise
         if container_id:
             try:
                 lines.append(restart_container(container_id))
             except Exception as e:
-                lines.append(f"Warning: volumes restored but container restart failed ({e})")
+                lines.append(
+                    f"Warning: data restored but container restart failed ({e}). "
+                    "Start the NPM container manually."
+                )
         lines.insert(0, "Restored NPM on this server from backup")
         return lines
 

@@ -224,6 +224,47 @@ def zip_contains_member(zip_path: Path, member: str) -> bool:
         return member in zf.namelist()
 
 
+def _tar_member_names(tar_gz: Path) -> list[str]:
+    with tarfile.open(tar_gz, "r:gz") as tar:
+        return [m.name for m in tar.getmembers()]
+
+
+def _tar_has_npm_data_files(tar_gz: Path) -> bool:
+    try:
+        names = _tar_member_names(tar_gz)
+    except tarfile.TarError:
+        return False
+    if any(NPM_DATA_MARKER in n.replace("\\", "/") for n in names):
+        return True
+    return False
+
+
+def validate_volume_member_for_restore(
+    zip_path: Path,
+    member: str,
+    *,
+    require_npm_data: bool = False,
+) -> None:
+    if not zip_contains_member(zip_path, member):
+        raise ValueError(f"Backup is missing {member}.")
+    with zipfile.ZipFile(zip_path, "r") as zf:
+        info = zf.getinfo(member)
+        if info.file_size < MIN_VOLUME_TAR_GZ_BYTES:
+            raise ValueError(
+                f"Backup {member} is too small ({info.file_size} bytes) to restore safely."
+            )
+    with tempfile.TemporaryDirectory(prefix="npmtbx-validate-") as tmp:
+        tmp_path = Path(tmp)
+        with zipfile.ZipFile(zip_path, "r") as zf:
+            zf.extract(member, tmp_path)
+        tar_path = tmp_path / member
+        if require_npm_data and not _tar_has_npm_data_files(tar_path):
+            raise ValueError(
+                "Backup data archive does not contain database.sqlite — refusing restore "
+                "so live NPM is not wiped."
+            )
+
+
 def load_api_export_from_zip(zip_path: Path) -> dict[str, Any]:
     """Rebuild export dict from snapshot api/*.json (same shape as NpmClient.export_configuration)."""
     out: dict[str, Any] = {}
@@ -247,15 +288,31 @@ def extract_volume_member(
     dest_dir: Path,
     *,
     clear_dest: bool = False,
+    require_npm_data: bool = False,
 ) -> None:
+    validate_volume_member_for_restore(
+        zip_path, member, require_npm_data=require_npm_data
+    )
     dest_dir.mkdir(parents=True, exist_ok=True)
     with tempfile.TemporaryDirectory(prefix="npmtbx-restore-") as tmp:
         tmp_path = Path(tmp)
         with zipfile.ZipFile(zip_path, "r") as zf:
             zf.extract(member, tmp_path)
         tar_path = tmp_path / member
+        staging = tmp_path / "staging"
+        staging.mkdir()
+        with tarfile.open(tar_path, "r:gz") as tar:
+            tar.extractall(staging)
+        if require_npm_data and not _path_has_npm_data(staging):
+            raise ValueError(
+                "Extracted backup has no NPM data files — live folders were not modified."
+            )
         if clear_dest and dest_dir.exists():
             shutil.rmtree(dest_dir)
         dest_dir.mkdir(parents=True, exist_ok=True)
-        with tarfile.open(tar_path, "r:gz") as tar:
-            tar.extractall(dest_dir)
+        for item in staging.iterdir():
+            target = dest_dir / item.name
+            if item.is_dir():
+                shutil.copytree(item, target, dirs_exist_ok=True)
+            else:
+                shutil.copy2(item, target)

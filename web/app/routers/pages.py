@@ -982,7 +982,7 @@ def snapshots_restore(
     try:
         lines = restore_npm_snapshot(db, user, backup_id)
         return RedirectResponse(f"/snapshots?msg={quote('; '.join(lines))}", status_code=303)
-    except ValueError as e:
+    except Exception as e:
         return RedirectResponse(f"/snapshots?err={quote(str(e))}", status_code=303)
 
 
@@ -1137,7 +1137,7 @@ def backup_restore_restore(
     try:
         lines = restore_npm_snapshot(db, user, backup_id)
         return RedirectResponse(f"/backup-restore?msg={quote('; '.join(lines))}", status_code=303)
-    except ValueError as e:
+    except Exception as e:
         return RedirectResponse(f"/backup-restore?err={quote(str(e))}", status_code=303)
 
 

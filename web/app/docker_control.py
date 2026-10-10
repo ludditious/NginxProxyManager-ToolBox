@@ -4,6 +4,19 @@
 from __future__ import annotations
 
 
+def start_container(container_id: str) -> str:
+    cid = (container_id or "").strip()
+    if not cid:
+        return ""
+    import docker
+
+    container = docker.from_env().containers.get(cid)
+    container.reload()
+    if container.status != "running":
+        container.start()
+    return f"Started NPM container {cid[:12]}"
+
+
 def restart_container(container_id: str) -> str:
     cid = (container_id or "").strip()
     if not cid:
@@ -16,7 +29,9 @@ def restart_container(container_id: str) -> str:
         container = docker.from_env().containers.get(cid)
     except Exception as e:
         raise RuntimeError(f"Cannot access Docker container {cid!r}: {e}") from e
-    container.stop(timeout=60)
+    container.reload()
+    if container.status == "running":
+        container.stop(timeout=60)
     container.start()
     return f"Restarted NPM container {cid[:12]}"
 

@@ -10,7 +10,7 @@
       <td>{{ b.size_bytes }}</td>
       <td class="backup-actions">
         <a href="/backups/download/{{ b.id }}">Download</a>
-        <form method="post" action="{{ restore_action | default('/backup-restore/restore') }}" class="inline-form" onsubmit="return confirm('Restore this backup to Source? NPM will be stopped briefly if Docker detect is configured.');">
+        <form method="post" action="{{ restore_action | default('/backup-restore/restore') }}" class="inline-form" onsubmit="return confirm('Replace live NPM data on this server with this backup? NPM will stop briefly. Only continue if this ZIP is a known-good full backup.');">
           <input type="hidden" name="backup_id" value="{{ b.id }}">
           <button type="submit" class="linkish">Restore</button>
         </form>
