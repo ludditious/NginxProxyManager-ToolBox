@@ -18,6 +18,7 @@ from ..crypto import encrypt
 from ..database import get_db
 from ..deps import get_current_user
 from ..docker_discover import discover_npm_containers, single_high_confidence
+from ..mount_diagnostics import diagnose_local_npm_mounts
 from ..models import (
     DAY_KEYS,
     BackupRunLog,
@@ -1011,8 +1012,9 @@ def backup_restore_page(
         db, user, is_automated=True, page=auto_page, backup_kind="full"
     )
     local = user.local_npm
-    candidates, discover_err = discover_npm_containers()
+    candidates, discover_err = discover_npm_containers(probe_api=False)
     auto = single_high_confidence(candidates)
+    mount_diag = diagnose_local_npm_mounts(local, candidates) if local else None
     npm_settings = user.npm_backup_settings
     return templates.TemplateResponse(
         request,
@@ -1024,6 +1026,7 @@ def backup_restore_page(
             candidates=candidates,
             discover_err=discover_err,
             auto_candidate=auto,
+            mount_diag=mount_diag,
             schedule=user.schedule,
             retention_days=npm_settings.retention_days if npm_settings else 30,
             manual_backups=manual,

@@ -24,6 +24,24 @@
 
 
 
+{% if mount_diag %}
+<section class="card panel-wide">
+  <h2 class="footer-heading">Mount check (before backup or restore)</h2>
+  <ul class="small">
+  {% for line in mount_diag.report_lines() %}
+    <li{% if 'NO' in line or 'not bind' in line %} class="danger-text"{% endif %}>{{ line }}</li>
+  {% endfor %}
+  </ul>
+  {% if mount_diag.ready_for_disk_backup %}
+  <p class="notice notice-ok">Ready for full backup from disk.</p>
+  {% elif mount_diag.can_try_docker_export %}
+  <p class="notice notice-warn">Disk path not ready; backup may use Docker export only.</p>
+  {% else %}
+  <p class="notice notice-err">Not ready — fix ToolBox <code>docker run</code> volumes before backup or restore.</p>
+  {% endif %}
+</section>
+{% endif %}
+
 {% if discover_err %}
 
 <p class="notice notice-warn">{{ discover_err }}</p>

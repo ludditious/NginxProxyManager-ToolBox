@@ -27,7 +27,9 @@ from npmtbx.sync_engine import apply_export_to_target
 
 from .config import get_settings
 from .docker_control import restart_container, start_container, stop_container
+from .docker_discover import discover_npm_containers
 from .local_volume_paths import apply_mount_defaults, validate_full_backup_paths
+from .mount_diagnostics import diagnose_local_npm_mounts
 from .npm_full_backup_prep import (
     container_ids_for_archive,
     mount_hint_from_candidates,
@@ -80,6 +82,8 @@ def create_npm_backup(
             db.commit()
             db.refresh(local)
         docker_candidates, discover_err = prepare_local_for_full_backup(db, local)
+        mount_diag = diagnose_local_npm_mounts(local, docker_candidates)
+        mount_diag.assert_ready_for_full_backup()
         extra_container_ids = container_ids_for_archive(local, docker_candidates)
         container_label = (local.docker_container_id or container_label)[:12]
         validate_full_backup_paths(local.data_path, local.letsencrypt_path)
@@ -221,6 +225,11 @@ def restore_npm_snapshot(
             restore_letsencrypt=has_le,
             record_size_bytes=row.size_bytes or 0,
         )
+
+        if isinstance(inst, LocalNpmBackup):
+            candidates, _ = discover_npm_containers(probe_api=False)
+            mount_diag = diagnose_local_npm_mounts(inst, candidates)
+            mount_diag.assert_ready_for_volume_restore()
 
         container_id = (inst.docker_container_id or "").strip()
         stopped = False
