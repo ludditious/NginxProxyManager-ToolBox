@@ -10,6 +10,7 @@ from pathlib import Path
 
 from sqlalchemy.orm import Session
 
+from npmtbx.backup_limits import MIN_FULL_BACKUP_ZIP_BYTES
 from npmtbx.restore_validation import (
     DATA_MEMBER,
     LE_MEMBER,
@@ -129,13 +130,13 @@ def create_npm_backup(
             if notes:
                 parts.append("Docker export: " + "; ".join(notes[:4]))
             raise ValueError(" ".join(parts))
-        min_bytes = 4096
         zip_size = zip_path.stat().st_size
-        if zip_size < min_bytes:
+        if zip_size < MIN_FULL_BACKUP_ZIP_BYTES:
             zip_path.unlink(missing_ok=True)
             raise ValueError(
-                f"Backup ZIP was too small ({zip_size} bytes)—no real NPM data was captured. "
-                "Fix mounts or link the NPM container, then try again."
+                f"Full backup ZIP is only {zip_size} bytes (need at least "
+                f"{MIN_FULL_BACKUP_ZIP_BYTES // 1024} KB). NPM /data was not captured — "
+                "fix /npm-data mounts or Docker link, then try again."
             )
 
     row = NpmBackup(

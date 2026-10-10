@@ -7,7 +7,7 @@
       <td>{{ b.name }}</td>
       <td class="muted small">{{ b.api_url }}</td>
       <td>{{ b.created_at }}</td>
-      <td>{{ b.size_bytes }}</td>
+      <td>{% if b.size_bytes < 65536 and b.backup_kind == 'full' %}<span class="danger-text" title="Too small for safe restore">{{ b.size_bytes }}</span>{% else %}{{ b.size_bytes }}{% endif %}</td>
       <td class="backup-actions">
         <a href="/backups/download/{{ b.id }}">Download</a>
         <form method="post" action="{{ restore_action | default('/backup-restore/restore') }}" class="inline-form restore-form">

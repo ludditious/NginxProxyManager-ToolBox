@@ -14,10 +14,9 @@ from pathlib import Path
 from typing import Any
 
 from .backup_format import build_manifest
+from .backup_limits import MIN_VOLUME_TAR_GZ_BYTES
 
 NPM_DATA_MARKER = "database.sqlite"
-# Empty directory tars are a few hundred bytes; real NPM /data is much larger.
-MIN_VOLUME_TAR_GZ_BYTES = 4096
 
 
 def _path_has_npm_data(source: Path) -> bool:

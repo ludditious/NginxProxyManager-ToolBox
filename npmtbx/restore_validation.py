@@ -10,15 +10,13 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from .backup_format import parse_manifest
-from .snapshot import (
+from .backup_limits import (
+    MIN_FULL_BACKUP_ZIP_BYTES,
+    MIN_NPM_SQLITE_BYTES,
     MIN_VOLUME_TAR_GZ_BYTES,
-    NPM_DATA_MARKER,
-    _path_has_npm_data,
-    zip_contains_member,
 )
+from .snapshot import NPM_DATA_MARKER, _path_has_npm_data, zip_contains_member
 
-MIN_FULL_RESTORE_ZIP_BYTES = 20_000
-MIN_SQLITE_FILE_BYTES = 4_096
 MIN_LETSENCRYPT_TAR_GZ_BYTES = 512
 DATA_MEMBER = "volumes/data.tar.gz"
 LE_MEMBER = "volumes/letsencrypt.tar.gz"
@@ -73,7 +71,7 @@ def _validate_data_member(zip_path: Path) -> None:
                 f"Backup data archive does not contain {NPM_DATA_MARKER} — refusing restore."
             )
         largest = max(p.stat().st_size for p in sqlite_paths if p.is_file())
-        if largest < MIN_SQLITE_FILE_BYTES:
+        if largest < MIN_NPM_SQLITE_BYTES:
             raise ValueError(
                 f"Backup {NPM_DATA_MARKER} is too small ({largest} bytes) to be valid NPM data."
             )
@@ -102,14 +100,14 @@ def _validate_zip_shell(zip_path: Path, record_size_bytes: int = 0) -> dict:
     if not zip_path.is_file():
         raise ValueError("Backup file is missing on disk.")
     size = zip_path.stat().st_size
-    if size < MIN_FULL_RESTORE_ZIP_BYTES:
+    if size < MIN_FULL_BACKUP_ZIP_BYTES:
         raise ValueError(
-            f"Backup ZIP is only {size} bytes (need at least {MIN_FULL_RESTORE_ZIP_BYTES}) — "
-            "refusing destructive restore."
+            f"Backup ZIP is only {size} bytes (need at least {MIN_FULL_BACKUP_ZIP_BYTES // 1024} KB) — "
+            "refusing destructive restore. A real NPM full backup is usually much larger."
         )
-    if record_size_bytes > 0 and record_size_bytes < MIN_FULL_RESTORE_ZIP_BYTES:
+    if record_size_bytes > 0 and record_size_bytes < MIN_FULL_BACKUP_ZIP_BYTES:
         raise ValueError(
-            f"Backup record size ({record_size_bytes} bytes) indicates an invalid full backup."
+            f"Backup record size ({record_size_bytes} bytes) is too small for a valid full NPM backup."
         )
     try:
         with zipfile.ZipFile(zip_path, "r") as zf:
