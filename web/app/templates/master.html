@@ -1,56 +1,22 @@
-{% extends "base.html" %}
-{% block title %} - Source{% endblock %}
-{% block content %}
-<div class="page-form-layout">
-<h1>Source NPM instance</h1>
-{% if message %}<p class="notice notice-ok">{{ message }}</p>{% endif %}
-{% if error %}<p class="notice notice-err">{{ error }}</p>{% endif %}
-
-{% include "_setup_help.html" %}
-
-{% if discover_err %}
-<p class="notice notice-warn">{{ discover_err }}</p>
-{% elif candidates %}
-<section class="card panel-wide">
-  <h2 class="footer-heading">Discovered NPM containers</h2>
-  <p class="muted small">Optional. Pick a row, check <em>Use detected instance</em>, then Save. Requires Docker socket access.</p>
-  {% if auto_candidate %}
-  <p class="muted small">One high-confidence candidate was detected. Confirm below or pick another row.</p>
-  {% endif %}
-  <table>
-    <thead><tr><th>Name</th><th>Image</th><th>Confidence</th><th>Published port</th></tr></thead>
-    <tbody>
-    {% for c in candidates %}
-      <tr>
-        <td>{{ c.name }}</td>
-        <td class="small muted">{{ c.image }}</td>
-        <td>{{ c.confidence }}</td>
-        <td class="small">{{ c.admin_port or '—' }}</td>
-      </tr>
-    {% endfor %}
-    </tbody>
-  </table>
-</section>
-{% endif %}
-
-<form method="post" action="/master/save" class="card">
-  <h2 class="footer-heading">NPM admin connection (Sync, Snapshots, API)</h2>
-  {% if auto_candidate %}
-  <label class="check">
-    <input type="checkbox" name="use_detected" value="on">
-    Use detected instance ({{ auto_candidate.name }}{% if auto_candidate.admin_port %}, port {{ auto_candidate.admin_port }}{% endif %})
-  </label>
-  <input type="hidden" name="candidate_id" value="{{ auto_candidate.container_id }}">
-  {% endif %}
-
-  {% with show_name_field=false, npm_host=npm_host, connect_host=connect_host, port_preset=port_preset, npm_port_custom=npm_port_custom, identity=master.identity if master else '', data_path=master.data_path if master else '', letsencrypt_path=master.letsencrypt_path if master else '', public_endpoint=master.public_endpoint if master else '', link_group=master.link_group if master else 'default', verify_tls=master.verify_tls if master else false, enabled=(master.enabled if master else true) %}
-  {% include "_npm_instance_form_fields.html" %}
-  {% endwith %}
-
-  <div class="row-actions">
-    <button type="submit">Save source</button>
-    <button type="submit" formaction="/master/test" formmethod="post">Test connection</button>
-  </div>
-</form>
-</div>
-{% endblock %}
+{% extends "base.html" %}
+{% block title %} - Source{% endblock %}
+{% block content %}
+<div class="page-form-layout">
+<h1>Source NPM instance</h1>
+<p class="muted small"><strong>Synchronize only.</strong> This is the NPM you copy <em>from</em> (can be a remote admin URL). It is <strong>not</strong> used for Backup / Restore on this Docker host — configure local NPM under <a href="/backup-restore">Backup / Restore</a>.</p>
+{% if message %}<p class="notice notice-ok">{{ message }}</p>{% endif %}
+{% if error %}<p class="notice notice-err">{{ error }}</p>{% endif %}
+
+<form method="post" action="/master/save" class="card">
+  <h2 class="footer-heading">NPM admin connection (Sync)</h2>
+  {% with show_name_field=false, show_volume_paths=false, show_sync_extras=true, npm_host=npm_host, connect_host=connect_host, port_preset=port_preset, npm_port_custom=npm_port_custom, identity=master.identity if master else '', public_endpoint=master.public_endpoint if master else '', link_group=master.link_group if master else 'default', verify_tls=master.verify_tls if master else false, enabled=(master.enabled if master else true) %}
+  {% include "_npm_instance_form_fields.html" %}
+  {% endwith %}
+
+  <div class="row-actions">
+    <button type="submit">Save source</button>
+    <button type="submit" formaction="/master/test" formmethod="post">Test connection</button>
+  </div>
+</form>
+</div>
+{% endblock %}

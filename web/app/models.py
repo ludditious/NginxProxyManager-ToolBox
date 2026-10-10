@@ -61,6 +61,31 @@ class User(Base):
     snapshot_schedule: Mapped[SnapshotSchedule | None] = relationship(
         back_populates="user", uselist=False
     )
+    local_npm: Mapped[LocalNpmBackup | None] = relationship(
+        back_populates="user", uselist=False
+    )
+
+
+class LocalNpmBackup(Base):
+    """NPM on this Docker host — used for Snapshots and Backup / Restore only (not Sync Source)."""
+
+    __tablename__ = "local_npm_backups"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    user_id: Mapped[int] = mapped_column(ForeignKey("users.id"), unique=True)
+    api_url: Mapped[str] = mapped_column(String(512), default="")
+    admin_host: Mapped[str] = mapped_column(String(512), default="")
+    connect_host: Mapped[str] = mapped_column(String(512), default="")
+    identity: Mapped[str] = mapped_column(String(256), default="admin@example.com")
+    password_enc: Mapped[str] = mapped_column(Text, default="")
+    data_path: Mapped[str] = mapped_column(String(1024), default="")
+    letsencrypt_path: Mapped[str] = mapped_column(String(1024), default="")
+    docker_container_id: Mapped[str] = mapped_column(String(128), default="")
+    docker_image: Mapped[str] = mapped_column(String(512), default="")
+    verify_tls: Mapped[bool] = mapped_column(Boolean, default=False)
+    enabled: Mapped[bool] = mapped_column(Boolean, default=True)
+
+    user: Mapped[User] = relationship(back_populates="local_npm")
 
 
 class MasterInstance(Base):

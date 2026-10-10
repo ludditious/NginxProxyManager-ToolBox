@@ -21,13 +21,21 @@ from npmtbx.sync_engine import apply_export_to_target
 
 from .config import get_settings
 from .docker_control import restart_container, stop_container
-from .models import MasterInstance, NpmBackup, SlaveInstance, User, utcnow
+from .models import LocalNpmBackup, MasterInstance, NpmBackup, SlaveInstance, User, utcnow
 from .npm_bridge import (
+    npm_client_from_local,
     npm_client_from_master,
     npm_client_from_slave,
     npm_dns_servers_for_user,
     npm_host_overrides_for_user,
 )
+
+
+def _require_local_npm(user: User) -> LocalNpmBackup:
+    local = user.local_npm
+    if not local or not local.enabled:
+        raise ValueError("Local NPM backup is disabled or not configured.")
+    return local
 
 
 def _host_label(url: str) -> str:
@@ -59,30 +67,27 @@ def create_npm_backup(
     include_volumes: bool = True,
     backup_kind: str = "snapshot",
 ) -> NpmBackup:
-    master = user.master
-    if not master or not master.enabled:
-        raise ValueError("Source NPM instance is disabled or not configured.")
-    client = npm_client_from_master(
-        master,
-        dns_servers=npm_dns_servers_for_user(user),
-        host_overrides=npm_host_overrides_for_user(user),
-    )
+    local = _require_local_npm(user)
+    dns = npm_dns_servers_for_user(user)
+    overrides = npm_host_overrides_for_user(user)
+    client = npm_client_from_local(local, dns_servers=dns, host_overrides=overrides)
     if backup_kind == "full":
         include_api = True
         include_volumes = True
     api_export = client.export_configuration() if include_api else {}
     prefix = "full" if backup_kind == "full" else "snap"
-    name = f"{prefix}-{backup_display_name(master.api_url)}"
+    label_url = local.api_url or "local-docker"
+    name = f"{prefix}-local-{backup_display_name(label_url)}"
     zip_path = backup_zip_path(name)
     manifest = create_snapshot_zip(
         dest_zip=zip_path,
-        source_label=name,
+        source_label=f"local-docker:{name}",
         api_base_url=client.base_url,
         api_export=api_export,
-        data_path=master.data_path,
-        letsencrypt_path=master.letsencrypt_path,
-        docker_image=master.docker_image,
-        docker_container_id=master.docker_container_id,
+        data_path=local.data_path,
+        letsencrypt_path=local.letsencrypt_path,
+        docker_image=local.docker_image,
+        docker_container_id=local.docker_container_id,
         include_volumes=include_volumes,
         include_docker_inspect=backup_kind == "full",
     )
@@ -90,7 +95,7 @@ def create_npm_backup(
         user_id=user.id,
         name=name,
         snapshot_id=str(manifest.get("snapshot_id") or ""),
-        api_url=client.base_url,
+        api_url=f"local ({client.base_url})",
         file_name=zip_path.name,
         manifest_json=json.dumps(manifest, ensure_ascii=False),
         is_automated=is_automated,
@@ -120,7 +125,7 @@ def backup_file_path(row: NpmBackup) -> Path:
 
 def _npm_client_for_restore(
     user: User,
-    inst: MasterInstance | SlaveInstance,
+    inst: MasterInstance | SlaveInstance | LocalNpmBackup,
 ):
     dns = npm_dns_servers_for_user(user)
     overrides = npm_host_overrides_for_user(user)
@@ -134,15 +139,16 @@ def restore_npm_snapshot(
     user: User,
     backup_id: int,
     *,
-    target: MasterInstance | SlaveInstance | None = None,
+    target: MasterInstance | SlaveInstance | LocalNpmBackup | None = None,
 ) -> list[str]:
     """Restore NPM to snapshot state: volume archives when present, else API export onto live NPM."""
     row = db.get(NpmBackup, backup_id)
     if not row or row.user_id != user.id:
         raise ValueError("Backup not found.")
-    inst = target or user.master
-    if not inst:
-        raise ValueError("No target instance configured.")
+    if target is not None:
+        inst = target
+    else:
+        inst = _require_local_npm(user)
     zip_path = backup_file_path(row)
     if not zip_path.is_file():
         raise ValueError("Backup file is missing on disk.")
@@ -155,9 +161,11 @@ def restore_npm_snapshot(
         data_path = (inst.data_path or "").strip()
         le_path = (inst.letsencrypt_path or "").strip()
         if has_data and not data_path:
-            raise ValueError("Snapshot includes /data but Source data path is not configured.")
+            raise ValueError("Snapshot includes /data but local data path is not configured on Backup / Restore.")
         if has_le and not le_path:
-            raise ValueError("Snapshot includes certificates volume but certificates path is not configured.")
+            raise ValueError(
+                "Snapshot includes certificates volume but local certificates path is not configured."
+            )
         container_id = (inst.docker_container_id or "").strip()
         if container_id:
             try:
@@ -184,9 +192,16 @@ def restore_npm_snapshot(
     if not api_keys:
         raise ValueError(
             "Snapshot has no volume archives and no API export. "
-            "Configure data and certificate paths on Source and create a new snapshot with volume archives enabled."
+            "Configure data and certificate paths on Backup / Restore and create a new snapshot with volume archives enabled."
         )
-    client = _npm_client_for_restore(user, inst)
+    if isinstance(inst, LocalNpmBackup):
+        client = npm_client_from_local(
+            inst,
+            dns_servers=npm_dns_servers_for_user(user),
+            host_overrides=npm_host_overrides_for_user(user),
+        )
+    else:
+        client = _npm_client_for_restore(user, inst)
     apply_lines = apply_export_to_target(
         export,
         client,
@@ -205,7 +220,7 @@ def restore_npm_volumes(
     user: User,
     backup_id: int,
     *,
-    target: MasterInstance | SlaveInstance | None = None,
+    target: MasterInstance | SlaveInstance | LocalNpmBackup | None = None,
 ) -> list[str]:
     return restore_npm_snapshot(db, user, backup_id, target=target)
 

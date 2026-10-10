@@ -136,8 +136,29 @@ def ensure_user_defaults(db: Session, user: User) -> None:
         db.add(NotificationPrefs(user_id=user.id))
     if not user.ui_settings:
         db.add(ToolBoxUiSettings(user_id=user.id))
+    if not user.local_npm:
+        from .models import LocalNpmBackup
+
+        local = LocalNpmBackup(user_id=user.id)
+        db.add(local)
+        db.flush()
+        _seed_local_npm_from_master(user, local)
     db.commit()
     db.refresh(user)
+
+
+def _seed_local_npm_from_master(user: User, local) -> None:
+    """One-time: move volume/docker hints off Source without copying remote Source URL."""
+    master = user.master
+    if not master:
+        return
+    if not (local.data_path or "").strip() and (master.data_path or "").strip():
+        local.data_path = master.data_path
+    if not (local.letsencrypt_path or "").strip() and (master.letsencrypt_path or "").strip():
+        local.letsencrypt_path = master.letsencrypt_path
+    if not (local.docker_container_id or "").strip() and (master.docker_container_id or "").strip():
+        local.docker_container_id = master.docker_container_id
+        local.docker_image = master.docker_image or ""
 
 
 def _push_full_backup_to_remotes(

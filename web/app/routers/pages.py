@@ -45,7 +45,7 @@ from npmtbx.dns_resolve import (
 )
 
 from ..npm_bridge import (
-    apply_candidate_to_master,
+    apply_candidate_to_local,
     apply_candidate_to_slave,
     npm_dns_servers_for_user,
     npm_host_overrides_for_user,
@@ -189,8 +189,6 @@ def master_page(
     if blocked := _redirect_if_backup_endpoint(user):
         return blocked
     master = user.master
-    candidates, discover_err = discover_npm_containers()
-    auto = single_high_confidence(candidates)
     npm_host, port_preset, npm_port_custom = parse_api_url(master.api_url if master else "")
     if master and master.admin_host:
         npm_host = master.admin_host
@@ -206,9 +204,6 @@ def master_page(
             connect_host=connect_host,
             port_preset=port_preset,
             npm_port_custom=npm_port_custom,
-            candidates=candidates,
-            discover_err=discover_err,
-            auto_candidate=auto,
             message=msg,
             error=err,
         ),
@@ -225,24 +220,14 @@ def master_save(
     npm_port_custom: str = Form(""),
     identity: str = Form(""),
     npm_password: str = Form(""),
-    data_path: str = Form(""),
-    letsencrypt_path: str = Form(""),
     public_endpoint: str = Form(""),
     link_group: str = Form("default"),
     verify_tls: str | None = Form(None),
     enabled: str | None = Form(None),
-    use_detected: str | None = Form(None),
-    candidate_id: str = Form(""),
 ):
     ensure_user_defaults(db, user)
     master = user.master
     assert master is not None
-    if use_detected == "on":
-        candidates, _ = discover_npm_containers()
-        for c in candidates:
-            if c.container_id == candidate_id.strip():
-                apply_candidate_to_master(master, c)
-                break
     try:
         master.admin_host = npm_host.strip()
         master.connect_host = connect_host.strip()
@@ -254,8 +239,6 @@ def master_save(
     master.identity = identity.strip()
     enc, _ = store_secret(npm_password, master.password_enc)
     master.password_enc = enc
-    master.data_path = data_path.strip()
-    master.letsencrypt_path = letsencrypt_path.strip()
     master.public_endpoint = public_endpoint.strip()
     master.link_group = link_group.strip() or "default"
     master.verify_tls = verify_tls == "on"
@@ -939,6 +922,12 @@ def backup_restore_page(
     auto, ap, apages, atotal = _paginated_backups(
         db, user, is_automated=True, page=auto_page, backup_kind="full"
     )
+    local = user.local_npm
+    candidates, discover_err = discover_npm_containers()
+    auto = single_high_confidence(candidates)
+    npm_host, port_preset, npm_port_custom = parse_api_url(local.api_url if local else "")
+    if local and local.admin_host:
+        npm_host = local.admin_host
     npm_settings = user.npm_backup_settings
     return templates.TemplateResponse(
         request,
@@ -946,6 +935,14 @@ def backup_restore_page(
         _ctx(
             request,
             user,
+            local=local,
+            npm_host=npm_host,
+            connect_host=(local.connect_host if local else "") or "",
+            port_preset=port_preset,
+            npm_port_custom=npm_port_custom,
+            candidates=candidates,
+            discover_err=discover_err,
+            auto_candidate=auto,
             schedule=user.schedule,
             retention_days=npm_settings.retention_days if npm_settings else 30,
             manual_backups=manual,
@@ -987,10 +984,94 @@ def backup_restore_schedule_save(
     return RedirectResponse("/backup-restore?msg=Backup%20schedule%20saved", status_code=303)
 
 
+@router.post("/backup-restore/local/save")
+def backup_restore_local_save(
+    user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+    npm_host: str = Form(""),
+    connect_host: str = Form(""),
+    port_preset: str = Form("81"),
+    npm_port_custom: str = Form(""),
+    identity: str = Form(""),
+    npm_password: str = Form(""),
+    data_path: str = Form(""),
+    letsencrypt_path: str = Form(""),
+    verify_tls: str | None = Form(None),
+    enabled: str | None = Form(None),
+    use_detected: str | None = Form(None),
+    candidate_id: str = Form(""),
+):
+    ensure_user_defaults(db, user)
+    local = user.local_npm
+    assert local is not None
+    if use_detected == "on":
+        candidates, _ = discover_npm_containers()
+        for c in candidates:
+            if c.container_id == candidate_id.strip():
+                apply_candidate_to_local(local, c)
+                break
+    try:
+        local.admin_host = npm_host.strip()
+        local.connect_host = connect_host.strip()
+        local.api_url = build_api_url_from_form(
+            npm_host, port_preset, npm_port_custom, connect_host=connect_host
+        )
+    except ValueError as e:
+        return RedirectResponse(f"/backup-restore?err={quote(str(e))}", status_code=303)
+    local.identity = identity.strip()
+    enc, _ = store_secret(npm_password, local.password_enc)
+    local.password_enc = enc
+    local.data_path = data_path.strip()
+    local.letsencrypt_path = letsencrypt_path.strip()
+    local.verify_tls = verify_tls == "on"
+    local.enabled = enabled != "off"
+    db.commit()
+    return RedirectResponse("/backup-restore?msg=Local%20NPM%20saved", status_code=303)
+
+
+@router.post("/backup-restore/local/test")
+def backup_restore_local_test(
+    user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+    npm_host: str = Form(""),
+    connect_host: str = Form(""),
+    port_preset: str = Form("81"),
+    npm_port_custom: str = Form(""),
+    identity: str = Form(""),
+    npm_password: str = Form(""),
+    verify_tls: str | None = Form(None),
+):
+    ensure_user_defaults(db, user)
+    local = user.local_npm
+    password_enc = local.password_enc if local else ""
+    try:
+        api_url = build_api_url_from_form(
+            npm_host, port_preset, npm_port_custom, connect_host=connect_host
+        )
+    except ValueError as e:
+        return RedirectResponse(f"/backup-restore?err={quote(str(e))}", status_code=303)
+    admin_host: str | None = npm_host.strip() or None
+    res = test_npm_connection(
+        api_url=api_url,
+        identity=identity,
+        password_enc=password_enc,
+        form_secret=npm_password or None,
+        verify_tls=verify_tls == "on",
+        dns_servers=npm_dns_servers_for_user(user),
+        host_overrides=npm_host_overrides_for_user(user),
+        admin_host=admin_host,
+    )
+    key = "msg" if res.ok else "err"
+    return RedirectResponse(f"/backup-restore?{key}={quote(res.message)}", status_code=303)
+
+
 @router.post("/backup-restore/create")
 def backup_restore_create(user: User = Depends(get_current_user), db: Session = Depends(get_db)):
-    run_user_backup(db, user, trigger="manual", backup_kind="full")
-    return RedirectResponse("/backup-restore?msg=Full%20backup%20created", status_code=303)
+    try:
+        run_user_backup(db, user, trigger="manual", backup_kind="full")
+        return RedirectResponse("/backup-restore?msg=Full%20backup%20created", status_code=303)
+    except ValueError as e:
+        return RedirectResponse(f"/backup-restore?err={quote(str(e))}", status_code=303)
 
 
 @router.post("/backup-restore/upload")

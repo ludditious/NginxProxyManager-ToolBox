@@ -17,7 +17,7 @@ from npmtbx.dns_resolve import (
 
 from .config import get_settings
 from .crypto import decrypt, encrypt
-from .models import MasterInstance, SlaveInstance
+from .models import LocalNpmBackup, MasterInstance, SlaveInstance
 
 
 @dataclass(frozen=True)
@@ -216,6 +216,65 @@ def test_npm_connection(
             _connection_error_message(url, e, verify_tls=verify_tls),
         )
     return TestResult(True, "Connection test", f"Authenticated to {url}")
+
+
+def npm_admin_host_for_local(local: LocalNpmBackup) -> str | None:
+    ah = (local.admin_host or "").strip()
+    if ah:
+        return ah
+    parsed = urlparse(NpmClient.normalize_api_url(local.api_url))
+    return (parsed.hostname or "").strip() or None
+
+
+def npm_client_from_local(
+    local: LocalNpmBackup,
+    *,
+    secret: str | None = None,
+    dns_servers: list[str] | None = None,
+    host_overrides: dict[str, str] | None = None,
+) -> NpmClient:
+    pw, err = resolve_secret(local.password_enc, secret)
+    if err or not pw:
+        raise ValueError(err or "Local NPM password missing.")
+    if not local.api_url.strip():
+        raise ValueError(
+            "Local NPM is not configured. Open Backup / Restore and set this host's NPM admin URL."
+        )
+    try:
+        client = NpmClient(
+            local.api_url,
+            identity=local.identity,
+            secret=pw,
+            verify_tls=local.verify_tls,
+            dns_servers=dns_servers,
+            host_overrides=host_overrides,
+            admin_host=npm_admin_host_for_local(local),
+        )
+        client.login()
+    except OSError as e:
+        raise ValueError(
+            _connection_error_message(local.api_url, e, verify_tls=local.verify_tls)
+        ) from e
+    return client
+
+
+def apply_candidate_to_local(local: LocalNpmBackup, candidate) -> None:
+    from .npm_address import PORT_PRESET_CUSTOM, build_api_url_from_form
+
+    local.docker_container_id = candidate.container_id
+    local.docker_image = candidate.image
+    if candidate.data_path:
+        local.data_path = candidate.data_path
+    if candidate.letsencrypt_path:
+        local.letsencrypt_path = candidate.letsencrypt_path
+    if candidate.admin_port and not local.api_url.strip():
+        port = (candidate.admin_port or "").strip()
+        host = "host.docker.internal"
+        if port in ("80", "81", "443"):
+            local.api_url = build_api_url_from_form(host, port, "")
+        elif port.isdigit():
+            local.api_url = build_api_url_from_form(host, PORT_PRESET_CUSTOM, port)
+        local.admin_host = host
 
 
 def apply_candidate_to_master(master: MasterInstance, candidate) -> None:

@@ -2,7 +2,7 @@
 {% block title %} - Snapshots{% endblock %}
 {% block content %}
 <h1>Snapshots</h1>
-<p class="muted small">Point-in-time capture (API JSON, optional small volume slice). For audit, comparison, and lightweight archive — <strong>not</strong> full server recovery. All times <strong>UTC</strong>.</p>
+<p class="muted small">Point-in-time capture of <strong>local NPM on this Docker host</strong> (API JSON). Configure local NPM on <a href="/backup-restore">Backup / Restore</a>. Not your Sync Source. All times <strong>UTC</strong>.</p>
 {% if message %}
 <div class="cmd-copy-block">
   <textarea readonly class="cmd-box message-box{% if message_class %} {{ message_class }}{% endif %}" id="backup-msg" rows="5">{{ message }}</textarea>
