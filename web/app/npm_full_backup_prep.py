@@ -10,6 +10,14 @@ from .models import LocalNpmBackup
 from .npm_bridge import apply_candidate_to_local
 
 
+def _container_ids_match(a: str, b: str) -> bool:
+    a = (a or "").strip()
+    b = (b or "").strip()
+    if not a or not b:
+        return False
+    return a == b or a.startswith(b[:12]) or b.startswith(a[:12])
+
+
 def _pick_candidate(candidates: list[NpmCandidate]) -> NpmCandidate | None:
     pick = single_high_confidence(candidates)
     if pick:
@@ -36,19 +44,28 @@ def mount_hint_from_candidates(candidates: list[NpmCandidate]) -> str:
     )
 
 
+def sync_local_npm_from_detect(db: Session, local: LocalNpmBackup, candidates: list[NpmCandidate]) -> bool:
+    """Link or relink detected NPM container id in the database. Returns True if updated."""
+    pick = _pick_candidate(candidates)
+    if not pick:
+        return False
+    saved = (local.docker_container_id or "").strip()
+    if saved and _container_ids_match(saved, pick.container_id):
+        return False
+    apply_candidate_to_local(local, pick)
+    db.add(local)
+    db.commit()
+    db.refresh(local)
+    return True
+
+
 def prepare_local_for_full_backup(
     db: Session,
     local: LocalNpmBackup,
 ) -> tuple[list[NpmCandidate], str | None]:
     """Detect NPM on Docker; link container if needed. Returns candidates and discover error."""
     candidates, discover_err = discover_npm_containers(probe_api=False)
-    if not (local.docker_container_id or "").strip():
-        pick = _pick_candidate(candidates)
-        if pick:
-            apply_candidate_to_local(local, pick)
-            db.add(local)
-            db.commit()
-            db.refresh(local)
+    sync_local_npm_from_detect(db, local, candidates)
     return candidates, discover_err
 
 

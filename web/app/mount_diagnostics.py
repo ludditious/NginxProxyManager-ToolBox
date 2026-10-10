@@ -117,7 +117,7 @@ class MountDiagnostic:
             f"Size ToolBox sees under {self.toolbox_data_path}: {self._human_bytes(self.toolbox_data_bytes)}",
         ]
         if self.stale_container_link:
-            lines.append("Saved container id does not match detected NPM — click Save after detect.")
+            lines.append("Container link was out of date (should auto-fix on page refresh).")
         if self.npm_data_host and self.toolbox_data_host:
             lines.append(
                 "Host /data paths match: "

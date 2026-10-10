@@ -19,6 +19,7 @@ from ..database import get_db
 from ..deps import get_current_user
 from ..docker_discover import discover_npm_containers, single_high_confidence
 from ..mount_diagnostics import diagnose_local_npm_mounts
+from ..npm_full_backup_prep import sync_local_npm_from_detect
 from ..models import (
     DAY_KEYS,
     BackupRunLog,
@@ -1013,6 +1014,9 @@ def backup_restore_page(
     )
     local = user.local_npm
     candidates, discover_err = discover_npm_containers(probe_api=False)
+    if local:
+        sync_local_npm_from_detect(db, local, candidates)
+        db.refresh(local)
     auto = single_high_confidence(candidates)
     mount_diag = diagnose_local_npm_mounts(local, candidates) if local else None
     npm_settings = user.npm_backup_settings

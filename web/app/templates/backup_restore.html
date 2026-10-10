@@ -27,6 +27,7 @@
 {% if mount_diag %}
 <section class="card panel-wide">
   <h2 class="footer-heading">Mount check (before backup or restore)</h2>
+  <p class="muted small">Detect reads <strong>NPM’s</strong> folders from Docker. It cannot change <strong>ToolBox’s</strong> own <code>docker run</code> — you must add the <code>-v host:…/npm-data</code> line on the Debian host once, then recreate this container.</p>
   <ul class="small">
   {% for line in mount_diag.report_lines() %}
     <li{% if 'NO' in line or 'not bind' in line %} class="danger-text"{% endif %}>{{ line }}</li>
