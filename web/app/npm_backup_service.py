@@ -101,8 +101,18 @@ def create_npm_backup(
             if zip_path.is_file():
                 zip_path.unlink()
             raise ValueError(
-                "Backup failed: no NPM /data files were archived. "
-                f"Check path {local.data_path!r} is mounted and readable in this ToolBox container."
+                "Backup failed: no NPM /data was archived. "
+                f"Path {local.data_path!r} is empty or not NPM's data folder (expect database.sqlite). "
+                "Bind-mount the same host directory NPM uses for /data (e.g. -v …/npm/data:/npm-data), "
+                "or Save with a detected NPM container so ToolBox can read /data via Docker."
+            )
+        min_bytes = 4096
+        zip_size = zip_path.stat().st_size
+        if zip_size < min_bytes:
+            zip_path.unlink(missing_ok=True)
+            raise ValueError(
+                f"Backup ZIP was too small ({zip_size} bytes)—no real NPM data was captured. "
+                "Fix mounts or link the NPM container, then try again."
             )
 
     row = NpmBackup(

@@ -15,6 +15,54 @@ from typing import Any
 
 from .backup_format import build_manifest
 
+NPM_DATA_MARKER = "database.sqlite"
+# Empty directory tars are a few hundred bytes; real NPM /data is much larger.
+MIN_VOLUME_TAR_GZ_BYTES = 4096
+
+
+def _path_has_npm_data(source: Path) -> bool:
+    if not source.is_dir():
+        return False
+    if (source / NPM_DATA_MARKER).is_file():
+        return True
+    return any(f.is_file() and f.stat().st_size > 0 for f in source.rglob("*"))
+
+
+def _tar_gz_has_files(tar_gz: Path) -> bool:
+    if not tar_gz.is_file() or tar_gz.stat().st_size < MIN_VOLUME_TAR_GZ_BYTES:
+        return False
+    try:
+        with tarfile.open(tar_gz, "r:gz") as tar:
+            return any(m.isfile() and m.size > 0 for m in tar.getmembers())
+    except tarfile.TarError:
+        return False
+
+
+def _archive_from_container(container_id: str, container_path: str, dest_tar_gz: Path) -> bool:
+    try:
+        import docker
+
+        container = docker.from_env().containers.get(container_id.strip())
+        stream, _ = container.get_archive(container_path)
+        raw_tar = b"".join(stream)
+        if not raw_tar:
+            return False
+        dest_tar_gz.parent.mkdir(parents=True, exist_ok=True)
+        with tempfile.NamedTemporaryFile(delete=False, suffix=".tar") as tmp:
+            tmp.write(raw_tar)
+            tmp_path = Path(tmp.name)
+        try:
+            with tarfile.open(tmp_path, "r:") as src, tarfile.open(dest_tar_gz, "w:gz") as dest:
+                for member in src.getmembers():
+                    extracted = src.extractfile(member)
+                    dest.addfile(member, extracted)
+        finally:
+            tmp_path.unlink(missing_ok=True)
+        return _tar_gz_has_files(dest_tar_gz)
+    except Exception:
+        dest_tar_gz.unlink(missing_ok=True)
+        return False
+
 
 def _add_tree_to_tar(tar: tarfile.TarFile, source: Path, arcname: str) -> None:
     if not source.exists():
@@ -75,12 +123,26 @@ def create_snapshot_zip(
             le_src = Path(letsencrypt_path).expanduser()
             data_tar = vol_dir / "data.tar.gz"
             le_tar = vol_dir / "letsencrypt.tar.gz"
-            if data_src.exists():
+            cid = docker_container_id.strip()
+            if data_src.exists() and _path_has_npm_data(data_src):
                 _archive_directory(data_src, data_tar)
+            elif cid:
+                _archive_from_container(cid, "/data", data_tar)
+            if _tar_gz_has_files(data_tar):
                 volume_files["data"] = "volumes/data.tar.gz"
-            if le_src.exists():
+            else:
+                data_tar.unlink(missing_ok=True)
+
+            if le_src.exists() and any(
+                f.is_file() and f.stat().st_size > 0 for f in le_src.rglob("*")
+            ):
                 _archive_directory(le_src, le_tar)
+            elif cid:
+                _archive_from_container(cid, "/etc/letsencrypt", le_tar)
+            if _tar_gz_has_files(le_tar):
                 volume_files["letsencrypt"] = "volumes/letsencrypt.tar.gz"
+            else:
+                le_tar.unlink(missing_ok=True)
 
         if include_docker_inspect and docker_container_id.strip():
             docker_dir = tmp_path / "docker"

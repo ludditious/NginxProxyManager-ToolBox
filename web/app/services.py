@@ -210,8 +210,8 @@ def run_user_backup(
     if backup_kind == "snapshot" and settings:
         include_api = settings.include_api
         include_volumes = False
-    if backup_kind == "full" and settings:
-        include_volumes = settings.include_volumes
+    if backup_kind == "full":
+        include_volumes = True
 
     lines: list[str] = []
     exit_code = 0
