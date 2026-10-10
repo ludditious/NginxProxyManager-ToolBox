@@ -1,54 +1,48 @@
-<!DOCTYPE html>
-<html lang="en">
-<head>
-  <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>{{ app_title }}{% block title %}{% endblock %}</title>
-  <link rel="icon" type="image/png" href="/static/favicon.png">
-  <link rel="stylesheet" href="/static/style.css">
-  <script>
-    (function () {
-      var t = localStorage.getItem("npm-toolbox-theme");
-      if (t === "light" || t === "dark") {
-        document.documentElement.setAttribute("data-theme", t);
-      }
-    })();
-  </script>
-</head>
-<body>
-  {% if not minimal_layout %}
-  <header class="top">
-    <div class="brand">{{ app_title }}</div>
-    <nav class="top-nav">
-      <a href="/dashboard">Dashboard</a>
-      <a href="/master">Source</a>
-      <a href="/slaves">Targets</a>
-      <a href="/migrate">Migrate</a>
-      <a href="/synchronize">Synchronize</a>
-      <a href="/logs">Log</a>
-      <a href="/backups">Backup / Restore</a>
-      <a href="/settings">Settings</a>
-      <a href="/about">About</a>
-      {% if update_available %}
-      <a href="/update" class="nav-update">Update</a>
-      {% endif %}
-    </nav>
-    <div class="top-actions">
-      <form method="post" action="/logout" class="logout-form">
-        <button type="submit" class="theme-toggle">Sign out</button>
-      </form>
-      <button type="button" class="theme-toggle" id="theme-toggle" aria-label="Switch light or dark theme">Light</button>
-    </div>
-  </header>
-  {% else %}
-  <header class="top minimal-top">
-    <div class="brand">{{ app_title }}</div>
-    <button type="button" class="theme-toggle" id="theme-toggle" aria-label="Switch light or dark theme">Light</button>
-  </header>
-  {% endif %}
-  <main class="{% if minimal_layout %}auth-main{% else %}container{% endif %}">
-    {% block content %}{% endblock %}
-  </main>
-  <script src="/static/app.js"></script>
-</body>
-</html>
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>{{ app_title }}{% block title %}{% endblock %}</title>
+  <link rel="icon" type="image/png" href="/static/favicon.png">
+  <link rel="stylesheet" href="/static/style.css">
+  <script>
+    (function () {
+      var t = localStorage.getItem("npm-toolbox-theme");
+      if (t === "light" || t === "dark") {
+        document.documentElement.setAttribute("data-theme", t);
+      }
+    })();
+  </script>
+</head>
+<body>
+  {% if not minimal_layout %}
+  <header class="top">
+    <div class="brand">{{ app_title }}</div>
+    <nav class="top-nav">
+      {% for item in nav_items %}
+      <a href="{{ item.href }}">{{ item.label }}</a>
+      {% endfor %}
+      {% if update_available %}
+      <a href="/update" class="nav-update">Update</a>
+      {% endif %}
+    </nav>
+    <div class="top-actions">
+      <form method="post" action="/logout" class="logout-form">
+        <button type="submit" class="theme-toggle">Sign out</button>
+      </form>
+      <button type="button" class="theme-toggle" id="theme-toggle" aria-label="Switch light or dark theme">Light</button>
+    </div>
+  </header>
+  {% else %}
+  <header class="top minimal-top">
+    <div class="brand">{{ app_title }}</div>
+    <button type="button" class="theme-toggle" id="theme-toggle" aria-label="Switch light or dark theme">Light</button>
+  </header>
+  {% endif %}
+  <main class="{% if minimal_layout %}auth-main{% else %}container{% endif %}">
+    {% block content %}{% endblock %}
+  </main>
+  <script src="/static/app.js"></script>
+</body>
+</html>

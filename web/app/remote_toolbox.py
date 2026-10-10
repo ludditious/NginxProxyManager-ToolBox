@@ -31,8 +31,13 @@ def push_backup_to_remote(remote: RemoteToolBox, backup: NpmBackup, zip_path: Pa
             url,
             headers={"Authorization": f"Bearer {token}"},
             files={"file": (backup.file_name, fh, "application/zip")},
-            data={"name": backup.name, "snapshot_id": backup.snapshot_id},
+            data={
+                "name": backup.name,
+                "snapshot_id": backup.snapshot_id,
+                "source_label": backup.api_url or backup.name,
+            },
             timeout=600,
+            verify=bool(remote.verify_tls),
         )
     if resp.status_code >= 400:
         raise RuntimeError(f"Push failed ({resp.status_code}): {resp.text[:500]}")

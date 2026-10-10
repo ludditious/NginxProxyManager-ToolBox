@@ -1,0 +1,99 @@
+{% extends "base.html" %}
+{% block title %} - DR Sync{% endblock %}
+{% block content %}
+<div class="page-form-layout">
+<h1>DR Sync</h1>
+<p class="muted small">Copy <strong>full backups</strong> to another ToolBox (backup endpoint or DR site). Use <code>http://</code> or <code>https://</code> with host and port on LAN (e.g. <code>http://192.168.1.50:8080</code>). All schedules <strong>UTC</strong>.</p>
+{% if message %}<p class="notice notice-ok">{{ message }}</p>{% endif %}
+{% if error %}<p class="notice notice-err">{{ error }}</p>{% endif %}
+
+<section class="card">
+  <h2 class="footer-heading">This ToolBox ingest token</h2>
+  <p class="muted small">Remote primaries use this when pushing backups here.</p>
+  <code class="cmd-box">{{ ingest_secret }}</code>
+  {% if public_toolbox_url %}
+  <p class="muted small">Published URL for remotes: <code>{{ public_toolbox_url }}</code></p>
+  {% endif %}
+</section>
+
+<section class="card">
+  <h2 class="footer-heading">Push destinations (from this primary)</h2>
+  {% for d in destinations %}
+  <form method="post" action="/dr-sync/destination/save" class="card nested-card">
+    <input type="hidden" name="dest_id" value="{{ d.id }}">
+    <label>Name<input type="text" name="name" value="{{ d.name }}" required></label>
+    <label>Remote ToolBox base URL<input type="text" name="base_url" value="{{ d.base_url }}" placeholder="http://10.0.0.5:8080" required></label>
+    <label>Remote ingest token<input type="password" name="ingest_token" autocomplete="off"></label>
+    <p class="muted small">Leave token blank to keep stored token.</p>
+    <label>Destination role
+      <select name="destination_kind">
+        <option value="backup_endpoint" {% if d.destination_kind == 'backup_endpoint' %}selected{% endif %}>Backup endpoint (storage only)</option>
+        <option value="dr_site" {% if d.destination_kind != 'backup_endpoint' %}selected{% endif %}>DR site (restore capable)</option>
+      </select>
+    </label>
+    <label class="check"><input type="checkbox" name="verify_tls" {% if d.verify_tls %}checked{% endif %}> Verify TLS (HTTPS only)</label>
+    <label class="check"><input type="checkbox" name="enabled" {% if d.enabled %}checked{% endif %}> Enabled</label>
+    <label class="check"><input type="checkbox" name="push_after_backup" {% if d.push_after_backup %}checked{% endif %}> Push after each full backup</label>
+    <label class="check"><input type="checkbox" name="schedule_enabled" {% if d.schedule_enabled %}checked{% endif %}> Scheduled DR push</label>
+    <label>Push interval
+      <select name="interval_minutes">
+        {% for minutes, label in dr_interval_choices %}
+        <option value="{{ minutes }}" {% if d.interval_minutes == minutes %}selected{% endif %}>{{ label }}</option>
+        {% endfor %}
+      </select>
+    </label>
+    <fieldset>
+      <legend>Push days (UTC)</legend>
+      <div class="day-grid">
+      {% for day in day_keys %}
+        <label class="check"><input type="checkbox" name="days" value="{{ day }}" {% if day in d.get_days() %}checked{% endif %}> {{ day|upper }}</label>
+      {% endfor %}
+      </div>
+    </fieldset>
+    <button type="submit">Save destination</button>
+  </form>
+  <form method="post" action="/dr-sync/push-now" class="inline-form mb">
+    <input type="hidden" name="dest_id" value="{{ d.id }}">
+    <button type="submit" class="linkish">Push full backup now</button>
+  </form>
+  <form method="post" action="/dr-sync/destination/delete" class="inline-form mb" onsubmit="return confirm('Delete destination?');">
+    <input type="hidden" name="dest_id" value="{{ d.id }}">
+    <button type="submit" class="linkish danger-text">Remove {{ d.name or d.id }}</button>
+  </form>
+  {% endfor %}
+  <form method="post" action="/dr-sync/destination/save" class="card nested-card">
+    <h3 class="footer-heading">Add destination</h3>
+    <label>Name<input type="text" name="name" placeholder="Colo endpoint" required></label>
+    <label>Remote ToolBox base URL<input type="text" name="base_url" placeholder="http://10.0.0.5:8080" required></label>
+    <label>Remote ingest token<input type="password" name="ingest_token" required autocomplete="off"></label>
+    <label>Destination role
+      <select name="destination_kind">
+        <option value="backup_endpoint">Backup endpoint</option>
+        <option value="dr_site" selected>DR site</option>
+      </select>
+    </label>
+    <button type="submit">Add destination</button>
+  </form>
+</section>
+
+<section class="card">
+  <h2 class="footer-heading">Pull from remote ToolBox</h2>
+  <form method="post" action="/migrate/pull">
+    <label>Source server
+      <select name="server_key" required>
+        {% for s in servers %}
+        <option value="{{ s.key }}">{{ s.label }}</option>
+        {% endfor %}
+      </select>
+    </label>
+    <label>Snapshot type
+      <select name="snapshot_type">
+        <option value="npm">Full backup (ZIP)</option>
+        <option value="toolbox">ToolBox configuration</option>
+      </select>
+    </label>
+    <button type="submit">Pull</button>
+  </form>
+</section>
+</div>
+{% endblock %}

@@ -229,7 +229,7 @@ def _letsencrypt_create_allowed(meta: dict[str, Any]) -> tuple[bool, str]:
             return (
                 False,
                 "DNS credentials are not available from the NPM API — recreate this "
-                "certificate on the target or copy /etc/letsencrypt via Backup/Restore",
+                "certificate on the target or copy /etc/letsencrypt via Snapshots",
             )
     if not _meta_text(meta.get("letsencrypt_email")):
         return False, "Let's Encrypt contact email missing from certificate export"

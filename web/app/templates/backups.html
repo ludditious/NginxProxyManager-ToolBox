@@ -1,7 +1,7 @@
 {% extends "base.html" %}
-{% block title %} - Backup / Restore{% endblock %}
+{% block title %} - Snapshots{% endblock %}
 {% block content %}
-<h1>Backup / Restore</h1>
+<h1>Snapshots</h1>
 {% if message %}
 <div class="cmd-copy-block">
   <textarea readonly class="cmd-box message-box{% if message_class %} {{ message_class }}{% endif %}" id="backup-msg" rows="5">{{ message }}</textarea>

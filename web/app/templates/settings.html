@@ -23,19 +23,34 @@
 </form>
 
 <section class="card">
-  <h2 class="footer-heading">Automated NPM backup</h2>
-  <form method="post" action="/settings/automated-backup">
-    <label class="check"><input type="checkbox" name="auto_backup_enabled" {% if auto_backup_enabled %}checked{% endif %}> Enable daily automated backup</label>
-    <label class="check"><input type="checkbox" name="include_api" {% if include_api %}checked{% endif %}> Include API JSON layer</label>
-    <label class="check"><input type="checkbox" name="include_volumes" {% if include_volumes %}checked{% endif %}> Include volume archives</label>
-    <label>Retention
-      <select name="auto_backup_retention">
+  <h2 class="footer-heading">ToolBox role &amp; navigation</h2>
+  <p class="muted small">All schedules use UTC. Backup endpoint mode shows only Dashboard, Logs, Settings, and About.</p>
+  <form method="post" action="/settings/ui">
+    <label>Role
+      <select name="toolbox_role">
+        <option value="primary" {% if toolbox_role == 'primary' %}selected{% endif %}>Primary (NPM on this host)</option>
+        <option value="backup_endpoint" {% if toolbox_role == 'backup_endpoint' %}selected{% endif %}>Backup endpoint (ingest storage)</option>
+        <option value="dr_site" {% if toolbox_role == 'dr_site' %}selected{% endif %}>DR site (restore capable)</option>
+      </select>
+    </label>
+    <label>Published ToolBox URL (for remotes)<input type="text" name="public_toolbox_url" value="{{ public_toolbox_url }}" placeholder="http://192.168.1.50:8080"></label>
+    <fieldset>
+      <legend>Show menu links (primary / DR site)</legend>
+      <label class="check"><input type="checkbox" name="nav_show_source" {% if nav_show_source %}checked{% endif %}> Source</label>
+      <label class="check"><input type="checkbox" name="nav_show_snapshots" {% if nav_show_snapshots %}checked{% endif %}> Snapshots</label>
+      <label class="check"><input type="checkbox" name="nav_show_synchronize" {% if nav_show_synchronize %}checked{% endif %}> Synchronize</label>
+      <label class="check"><input type="checkbox" name="nav_show_backup_restore" {% if nav_show_backup_restore %}checked{% endif %}> Backup / Restore</label>
+      <label class="check"><input type="checkbox" name="nav_show_dr_sync" {% if nav_show_dr_sync %}checked{% endif %}> DR Sync</label>
+      <label class="check"><input type="checkbox" name="nav_show_logs" {% if nav_show_logs %}checked{% endif %}> Logs</label>
+    </fieldset>
+    <label>Stored backup retention (backup endpoint only)
+      <select name="endpoint_retention_days">
         {% for form_val, days, label in backup_retention_options %}
-        <option value="{{ form_val }}" {% if auto_backup_retention_days == days %}selected{% endif %}>{{ label }}</option>
+        <option value="{{ form_val }}" {% if endpoint_retention_days == days %}selected{% endif %}>{{ label }}</option>
         {% endfor %}
       </select>
     </label>
-    <button type="submit">Save backup settings</button>
+    <button type="submit">Save role &amp; navigation</button>
   </form>
 </section>
 
@@ -92,6 +107,10 @@
     <label>From<input type="email" name="smtp_from" value="{{ smtp.from_address if smtp else '' }}"></label>
     <label>To (comma-separated)<input type="text" name="smtp_to" value="{{ smtp.to_addresses if smtp else '' }}"></label>
     <button type="submit">Save SMTP</button>
+  </form>
+  <form method="post" action="/settings/smtp/test" class="mt">
+    <label>Send test to<input type="email" name="test_to" value="{{ smtp.to_addresses.split(',')[0] if smtp and smtp.to_addresses else user.email }}" required></label>
+    <button type="submit">Send test email</button>
   </form>
   <form method="post" action="/settings/notifications">
     <label class="check"><input type="checkbox" name="on_backup_success" {% if not prefs or prefs.on_backup_success %}checked{% endif %}> Backup success</label>

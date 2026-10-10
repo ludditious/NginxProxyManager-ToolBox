@@ -57,6 +57,13 @@ def migrate_schema() -> None:
         ("slave_instances", "schedule_sync_enabled", "BOOLEAN NOT NULL DEFAULT 0"),
         ("slave_instances", "migrate_toolbox_url", "VARCHAR(512) NOT NULL DEFAULT ''"),
         ("slave_instances", "migrate_ingest_token_enc", "TEXT NOT NULL DEFAULT ''"),
+        ("npm_backups", "backup_kind", "VARCHAR(16) NOT NULL DEFAULT 'snapshot'"),
+        ("remote_toolboxes", "verify_tls", "BOOLEAN NOT NULL DEFAULT 0"),
+        ("remote_toolboxes", "destination_kind", "VARCHAR(32) NOT NULL DEFAULT 'dr_site'"),
+        ("remote_toolboxes", "schedule_enabled", "BOOLEAN NOT NULL DEFAULT 0"),
+        ("remote_toolboxes", "interval_minutes", "INTEGER NOT NULL DEFAULT 10080"),
+        ("remote_toolboxes", "days_json", "VARCHAR(128) NOT NULL DEFAULT '[\"sun\"]'"),
+        ("remote_toolboxes", "last_push_at", "DATETIME"),
     )
     with engine.begin() as conn:
         for table, column, ddl in patches:

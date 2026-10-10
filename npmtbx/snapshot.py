@@ -50,6 +50,7 @@ def create_snapshot_zip(
     docker_image: str = "",
     docker_container_id: str = "",
     include_volumes: bool = True,
+    include_docker_inspect: bool = False,
 ) -> dict[str, Any]:
     snapshot_id = uuid.uuid4().hex
     dest_zip.parent.mkdir(parents=True, exist_ok=True)
@@ -81,6 +82,24 @@ def create_snapshot_zip(
                 _archive_directory(le_src, le_tar)
                 volume_files["letsencrypt"] = "volumes/letsencrypt.tar.gz"
 
+        if include_docker_inspect and docker_container_id.strip():
+            docker_dir = tmp_path / "docker"
+            docker_dir.mkdir(exist_ok=True)
+            inspect_path = docker_dir / "container-inspect.json"
+            try:
+                import docker
+
+                container = docker.from_env().containers.get(docker_container_id.strip())
+                inspect_path.write_text(
+                    json.dumps(container.attrs, ensure_ascii=False, indent=2),
+                    encoding="utf-8",
+                )
+            except Exception as exc:
+                inspect_path.write_text(
+                    json.dumps({"_error": str(exc)}, ensure_ascii=False, indent=2),
+                    encoding="utf-8",
+                )
+
         manifest = build_manifest(
             snapshot_id=snapshot_id,
             source_label=source_label,
@@ -101,6 +120,28 @@ def create_snapshot_zip(
                     zf.write(path, path.relative_to(tmp_path).as_posix())
 
     return manifest
+
+
+def zip_contains_member(zip_path: Path, member: str) -> bool:
+    with zipfile.ZipFile(zip_path, "r") as zf:
+        return member in zf.namelist()
+
+
+def load_api_export_from_zip(zip_path: Path) -> dict[str, Any]:
+    """Rebuild export dict from snapshot api/*.json (same shape as NpmClient.export_configuration)."""
+    out: dict[str, Any] = {}
+    with zipfile.ZipFile(zip_path, "r") as zf:
+        if "manifest.json" in zf.namelist():
+            manifest = json.loads(zf.read("manifest.json").decode("utf-8"))
+            if isinstance(manifest, dict) and manifest.get("api_base_url"):
+                out["api_base_url"] = manifest["api_base_url"]
+        for name in zf.namelist():
+            if not name.startswith("api/") or not name.endswith(".json"):
+                continue
+            key = Path(name).stem
+            payload = json.loads(zf.read(name).decode("utf-8"))
+            out[key] = payload
+    return out
 
 
 def extract_volume_member(

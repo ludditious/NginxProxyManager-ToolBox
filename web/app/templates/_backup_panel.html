@@ -1,6 +1,6 @@
 <section class="footer-backups card backup-section">
   <h2>Nginx Proxy Manager</h2>
-  <p class="muted small">Snapshots include NPM API JSON (proxy hosts, streams, certificates, settings, users, and related data) plus optional <code>/data</code> and <code>/etc/letsencrypt</code> volume archives.</p>
+  <p class="muted small">Snapshots include NPM API JSON plus optional <code>/data</code> and <code>/etc/letsencrypt</code> volume archives. <strong>Restore snapshot</strong> replays the full on-disk state when volumes are in the file (same host paths as Source); otherwise it applies configuration through the NPM API.</p>
   <h3 class="footer-heading">Manual backups</h3>
   <form method="post" action="/backups/create" class="footer-actions">
     <button type="submit">Create manual backup</button>

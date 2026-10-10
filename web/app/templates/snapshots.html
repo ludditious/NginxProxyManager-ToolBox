@@ -1,0 +1,64 @@
+{% extends "base.html" %}
+{% block title %} - Snapshots{% endblock %}
+{% block content %}
+<h1>Snapshots</h1>
+<p class="muted small">Point-in-time capture (API JSON, optional small volume slice). For audit, comparison, and lightweight archive — <strong>not</strong> full server recovery. All times <strong>UTC</strong>.</p>
+{% if message %}
+<div class="cmd-copy-block">
+  <textarea readonly class="cmd-box message-box{% if message_class %} {{ message_class }}{% endif %}" id="backup-msg" rows="5">{{ message }}</textarea>
+  <button type="button" class="copy-cmd" data-target="backup-msg">Copy</button>
+</div>
+{% endif %}
+
+<section class="card backup-section">
+  <h2 class="footer-heading">Scheduled snapshots</h2>
+  <form method="post" action="/snapshots/schedule/save">
+    <label class="check"><input type="checkbox" name="enabled" {% if snapshot_schedule.enabled %}checked{% endif %}> Enable scheduled snapshots</label>
+    <label>Interval
+      <select name="interval_minutes">
+        {% for minutes, label in interval_choices %}
+        <option value="{{ minutes }}" {% if snapshot_schedule.interval_minutes == minutes %}selected{% endif %}>{{ label }}</option>
+        {% endfor %}
+      </select>
+    </label>
+    <label>Retention
+      <select name="retention_days">
+        {% for form_val, days, label in backup_retention_options %}
+        <option value="{{ form_val }}" {% if snapshot_schedule.retention_days == days %}selected{% endif %}>{{ label }}</option>
+        {% endfor %}
+      </select>
+    </label>
+    <fieldset>
+      <legend>Days (UTC)</legend>
+      <div class="day-grid">
+      {% for d in day_keys %}
+        <label class="check"><input type="checkbox" name="days" value="{{ d }}" {% if d in snapshot_schedule.get_days() %}checked{% endif %}> {{ d|upper }}</label>
+      {% endfor %}
+      </div>
+    </fieldset>
+    <button type="submit">Save snapshot schedule</button>
+  </form>
+</section>
+
+<section class="footer-backups card backup-section">
+  <h2 class="footer-heading">Manual snapshots</h2>
+  <form method="post" action="/snapshots/create" class="footer-actions">
+    <button type="submit">Create snapshot now</button>
+  </form>
+  {% with backups=manual_backups, page=manual_page, pages=manual_pages, total=manual_total, page_param='manual_page', other_page_param='auto_page', other_page=auto_page, restore_action='/snapshots/restore' %}
+  {% include "_backup_table.html" %}
+  {% endwith %}
+  <h3 class="footer-heading">Automated snapshots</h3>
+  {% with backups=auto_backups, page=auto_page, pages=auto_pages, total=auto_total, page_param='auto_page', other_page_param='manual_page', other_page=manual_page, restore_action='/snapshots/restore' %}
+  {% include "_backup_table.html" %}
+  {% endwith %}
+</section>
+
+<section class="card backup-section">
+  <h2 class="footer-heading">Upload snapshot</h2>
+  <form method="post" action="/snapshots/upload" enctype="multipart/form-data">
+    <label>Snapshot ZIP<input type="file" name="backup_file" accept=".zip,application/zip" required></label>
+    <button type="submit">Upload</button>
+  </form>
+</section>
+{% endblock %}

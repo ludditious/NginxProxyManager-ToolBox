@@ -11,12 +11,20 @@ from urllib.parse import urlparse
 
 from sqlalchemy.orm import Session
 
-from npmtbx.snapshot import create_snapshot_zip, extract_volume_member
+from npmtbx.snapshot import (
+    create_snapshot_zip,
+    extract_volume_member,
+    load_api_export_from_zip,
+    zip_contains_member,
+)
+from npmtbx.sync_engine import apply_export_to_target
 
 from .config import get_settings
-from .models import MasterInstance, NpmBackup, User, utcnow
+from .docker_control import restart_container, stop_container
+from .models import MasterInstance, NpmBackup, SlaveInstance, User, utcnow
 from .npm_bridge import (
     npm_client_from_master,
+    npm_client_from_slave,
     npm_dns_servers_for_user,
     npm_host_overrides_for_user,
 )
@@ -49,6 +57,7 @@ def create_npm_backup(
     is_automated: bool = False,
     include_api: bool = True,
     include_volumes: bool = True,
+    backup_kind: str = "snapshot",
 ) -> NpmBackup:
     master = user.master
     if not master or not master.enabled:
@@ -58,8 +67,12 @@ def create_npm_backup(
         dns_servers=npm_dns_servers_for_user(user),
         host_overrides=npm_host_overrides_for_user(user),
     )
+    if backup_kind == "full":
+        include_api = True
+        include_volumes = True
     api_export = client.export_configuration() if include_api else {}
-    name = backup_display_name(master.api_url)
+    prefix = "full" if backup_kind == "full" else "snap"
+    name = f"{prefix}-{backup_display_name(master.api_url)}"
     zip_path = backup_zip_path(name)
     manifest = create_snapshot_zip(
         dest_zip=zip_path,
@@ -71,6 +84,7 @@ def create_npm_backup(
         docker_image=master.docker_image,
         docker_container_id=master.docker_container_id,
         include_volumes=include_volumes,
+        include_docker_inspect=backup_kind == "full",
     )
     row = NpmBackup(
         user_id=user.id,
@@ -80,6 +94,7 @@ def create_npm_backup(
         file_name=zip_path.name,
         manifest_json=json.dumps(manifest, ensure_ascii=False),
         is_automated=is_automated,
+        backup_kind=backup_kind,
         size_bytes=zip_path.stat().st_size if zip_path.is_file() else 0,
     )
     db.add(row)
@@ -103,7 +118,25 @@ def backup_file_path(row: NpmBackup) -> Path:
     return get_settings().backups_dir / row.file_name
 
 
-def restore_npm_volumes(db: Session, user: User, backup_id: int, *, target: MasterInstance | None = None) -> list[str]:
+def _npm_client_for_restore(
+    user: User,
+    inst: MasterInstance | SlaveInstance,
+):
+    dns = npm_dns_servers_for_user(user)
+    overrides = npm_host_overrides_for_user(user)
+    if isinstance(inst, SlaveInstance):
+        return npm_client_from_slave(inst, dns_servers=dns, host_overrides=overrides)
+    return npm_client_from_master(inst, dns_servers=dns, host_overrides=overrides)
+
+
+def restore_npm_snapshot(
+    db: Session,
+    user: User,
+    backup_id: int,
+    *,
+    target: MasterInstance | SlaveInstance | None = None,
+) -> list[str]:
+    """Restore NPM to snapshot state: volume archives when present, else API export onto live NPM."""
     row = db.get(NpmBackup, backup_id)
     if not row or row.user_id != user.id:
         raise ValueError("Backup not found.")
@@ -113,31 +146,88 @@ def restore_npm_volumes(db: Session, user: User, backup_id: int, *, target: Mast
     zip_path = backup_file_path(row)
     if not zip_path.is_file():
         raise ValueError("Backup file is missing on disk.")
+
+    has_data = zip_contains_member(zip_path, "volumes/data.tar.gz")
+    has_le = zip_contains_member(zip_path, "volumes/letsencrypt.tar.gz")
     lines: list[str] = []
-    if inst.data_path.strip():
-        extract_volume_member(zip_path, "volumes/data.tar.gz", Path(inst.data_path), clear_dest=True)
-        lines.append(f"Restored /data volume to {inst.data_path}")
-    if inst.letsencrypt_path.strip():
-        extract_volume_member(zip_path, "volumes/letsencrypt.tar.gz", Path(inst.letsencrypt_path), clear_dest=True)
-        lines.append(f"Restored /etc/letsencrypt volume to {inst.letsencrypt_path}")
-    if not lines:
-        lines.append("No volume paths configured; nothing restored.")
+
+    if has_data or has_le:
+        data_path = (inst.data_path or "").strip()
+        le_path = (inst.letsencrypt_path or "").strip()
+        if has_data and not data_path:
+            raise ValueError("Snapshot includes /data but Source data path is not configured.")
+        if has_le and not le_path:
+            raise ValueError("Snapshot includes certificates volume but certificates path is not configured.")
+        container_id = (inst.docker_container_id or "").strip()
+        if container_id:
+            try:
+                stop_container(container_id)
+                lines.append(f"Stopped NPM container {container_id[:12]}")
+            except Exception as e:
+                lines.append(f"Warning: could not stop container before restore ({e})")
+        if has_data and data_path:
+            extract_volume_member(zip_path, "volumes/data.tar.gz", Path(data_path), clear_dest=True)
+            lines.append(f"Restored /data to {data_path}")
+        if has_le and le_path:
+            extract_volume_member(zip_path, "volumes/letsencrypt.tar.gz", Path(le_path), clear_dest=True)
+            lines.append(f"Restored /etc/letsencrypt to {le_path}")
+        if container_id:
+            try:
+                lines.append(restart_container(container_id))
+            except Exception as e:
+                lines.append(f"Warning: volumes restored but container restart failed ({e})")
+        lines.insert(0, "Full snapshot restore (on-disk NPM state)")
+        return lines
+
+    export = load_api_export_from_zip(zip_path)
+    api_keys = [k for k in export if k != "api_base_url" and not (isinstance(export.get(k), dict) and "_error" in export[k])]
+    if not api_keys:
+        raise ValueError(
+            "Snapshot has no volume archives and no API export. "
+            "Configure data and certificate paths on Source and create a new snapshot with volume archives enabled."
+        )
+    client = _npm_client_for_restore(user, inst)
+    apply_lines = apply_export_to_target(
+        export,
+        client,
+        source_data_path=(inst.data_path or "").strip(),
+        source_letsencrypt_path=(inst.letsencrypt_path or "").strip(),
+        source_docker_container_id=(inst.docker_container_id or "").strip(),
+        source_client=None,
+    )
+    lines.append("Configuration restore from snapshot API export (no volume archives in file)")
+    lines.extend(apply_lines)
     return lines
 
 
-def purge_expired_automated_backups(db: Session, user: User, retention_days: int) -> int:
+def restore_npm_volumes(
+    db: Session,
+    user: User,
+    backup_id: int,
+    *,
+    target: MasterInstance | SlaveInstance | None = None,
+) -> list[str]:
+    return restore_npm_snapshot(db, user, backup_id, target=target)
+
+
+def purge_expired_backups(
+    db: Session,
+    user: User,
+    retention_days: int,
+    *,
+    backup_kind: str | None = None,
+) -> int:
     if retention_days < 1:
         return 0
     cutoff = utcnow() - timedelta(days=retention_days)
-    rows = (
-        db.query(NpmBackup)
-        .filter(
-            NpmBackup.user_id == user.id,
-            NpmBackup.is_automated.is_(True),
-            NpmBackup.created_at < cutoff,
-        )
-        .all()
+    q = db.query(NpmBackup).filter(
+        NpmBackup.user_id == user.id,
+        NpmBackup.is_automated.is_(True),
+        NpmBackup.created_at < cutoff,
     )
+    if backup_kind:
+        q = q.filter(NpmBackup.backup_kind == backup_kind)
+    rows = q.all()
     count = 0
     for row in rows:
         try:
@@ -146,3 +236,9 @@ def purge_expired_automated_backups(db: Session, user: User, retention_days: int
         except ValueError:
             continue
     return count
+
+
+def purge_expired_automated_backups(db: Session, user: User, retention_days: int) -> int:
+    if retention_days < 1:
+        return 0
+    return purge_expired_backups(db, user, retention_days)

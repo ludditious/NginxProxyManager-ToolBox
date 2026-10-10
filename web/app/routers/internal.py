@@ -47,6 +47,7 @@ async def ingest_snapshot(
     file: UploadFile = File(...),
     name: str = Form(""),
     snapshot_id: str = Form(""),
+    source_label: str = Form(""),
 ):
     _require_ingest(authorization)
     raw = await file.read()
@@ -58,6 +59,7 @@ async def ingest_snapshot(
         file_bytes=raw,
         name=name or file.filename or "ingest",
         snapshot_id=snapshot_id,
+        source_label=source_label.strip(),
     )
     return {"ok": True, "backup_id": row.id, "name": row.name}
 

@@ -55,6 +55,12 @@ class User(Base):
     notification_prefs: Mapped[NotificationPrefs | None] = relationship(
         back_populates="user", uselist=False
     )
+    ui_settings: Mapped[ToolBoxUiSettings | None] = relationship(
+        back_populates="user", uselist=False
+    )
+    snapshot_schedule: Mapped[SnapshotSchedule | None] = relationship(
+        back_populates="user", uselist=False
+    )
 
 
 class MasterInstance(Base):
@@ -109,8 +115,53 @@ class SlaveInstance(Base):
     user: Mapped[User] = relationship(back_populates="slaves")
 
 
+class ToolBoxUiSettings(Base):
+    __tablename__ = "toolbox_ui_settings"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    user_id: Mapped[int] = mapped_column(ForeignKey("users.id"), unique=True)
+    toolbox_role: Mapped[str] = mapped_column(String(32), default="primary")
+    nav_show_source: Mapped[bool] = mapped_column(Boolean, default=True)
+    nav_show_snapshots: Mapped[bool] = mapped_column(Boolean, default=True)
+    nav_show_synchronize: Mapped[bool] = mapped_column(Boolean, default=True)
+    nav_show_backup_restore: Mapped[bool] = mapped_column(Boolean, default=True)
+    nav_show_dr_sync: Mapped[bool] = mapped_column(Boolean, default=True)
+    nav_show_logs: Mapped[bool] = mapped_column(Boolean, default=True)
+    endpoint_retention_days: Mapped[int] = mapped_column(Integer, default=30)
+    public_toolbox_url: Mapped[str] = mapped_column(String(512), default="")
+
+    user: Mapped[User] = relationship(back_populates="ui_settings")
+
+
+class SnapshotSchedule(Base):
+    __tablename__ = "snapshot_schedules"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    user_id: Mapped[int] = mapped_column(ForeignKey("users.id"), unique=True)
+    enabled: Mapped[bool] = mapped_column(Boolean, default=False)
+    interval_minutes: Mapped[int] = mapped_column(Integer, default=1440)
+    days_json: Mapped[str] = mapped_column(String(128), default='["mon","tue","wed","thu","fri","sat","sun"]')
+    last_run_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    retention_days: Mapped[int] = mapped_column(Integer, default=30)
+
+    user: Mapped[User] = relationship(back_populates="snapshot_schedule")
+
+    def get_days(self) -> set[str]:
+        try:
+            data = json.loads(self.days_json)
+            if isinstance(data, list):
+                return {str(d).lower() for d in data if str(d).lower() in DAY_KEYS}
+        except json.JSONDecodeError:
+            pass
+        return set(DAY_KEYS)
+
+    def set_days(self, days: set[str]) -> None:
+        ordered = [d for d in DAY_KEYS if d in days]
+        self.days_json = json.dumps(ordered)
+
+
 class RemoteToolBox(Base):
-    """Push snapshot to another ToolBox (DR)."""
+    """Push full backups to another ToolBox (DR Sync / backup endpoint)."""
 
     __tablename__ = "remote_toolboxes"
 
@@ -119,11 +170,44 @@ class RemoteToolBox(Base):
     name: Mapped[str] = mapped_column(String(128), default="")
     base_url: Mapped[str] = mapped_column(String(512), default="")
     ingest_token_enc: Mapped[str] = mapped_column(Text, default="")
+    verify_tls: Mapped[bool] = mapped_column(Boolean, default=False)
+    destination_kind: Mapped[str] = mapped_column(String(32), default="dr_site")
     enabled: Mapped[bool] = mapped_column(Boolean, default=True)
     push_after_backup: Mapped[bool] = mapped_column(Boolean, default=True)
+    schedule_enabled: Mapped[bool] = mapped_column(Boolean, default=False)
+    interval_minutes: Mapped[int] = mapped_column(Integer, default=10080)
+    days_json: Mapped[str] = mapped_column(String(128), default='["sun"]')
+    last_push_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     sort_order: Mapped[int] = mapped_column(Integer, default=0)
 
     user: Mapped[User] = relationship(back_populates="remote_destinations")
+
+    def get_days(self) -> set[str]:
+        try:
+            data = json.loads(self.days_json)
+            if isinstance(data, list):
+                return {str(d).lower() for d in data if str(d).lower() in DAY_KEYS}
+        except json.JSONDecodeError:
+            pass
+        return set(DAY_KEYS)
+
+    def set_days(self, days: set[str]) -> None:
+        ordered = [d for d in DAY_KEYS if d in days]
+        self.days_json = json.dumps(ordered)
+
+
+class IngestEvent(Base):
+    __tablename__ = "ingest_events"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    user_id: Mapped[int] = mapped_column(ForeignKey("users.id"), index=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, index=True)
+    ok: Mapped[bool] = mapped_column(Boolean, default=True)
+    source_label: Mapped[str] = mapped_column(String(256), default="")
+    file_name: Mapped[str] = mapped_column(String(512), default="")
+    detail: Mapped[str] = mapped_column(String(512), default="")
+
+    user: Mapped[User] = relationship()
 
 
 class RemotePullSource(Base):
@@ -235,6 +319,7 @@ class NpmBackup(Base):
     file_name: Mapped[str] = mapped_column(String(512), default="")
     manifest_json: Mapped[str] = mapped_column(Text, default="")
     is_automated: Mapped[bool] = mapped_column(Boolean, default=False, index=True)
+    backup_kind: Mapped[str] = mapped_column(String(16), default="snapshot", index=True)
     size_bytes: Mapped[int] = mapped_column(Integer, default=0)
 
     user: Mapped[User] = relationship(back_populates="npm_backups")

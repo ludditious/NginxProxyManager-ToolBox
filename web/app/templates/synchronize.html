@@ -1,82 +1,61 @@
-{% extends "base.html" %}
-{% block title %} - Synchronize{% endblock %}
-{% block content %}
-<div class="page-form-layout">
-<h1>Synchronize</h1>
-{% if message %}<p class="notice notice-ok">{{ message }}</p>{% endif %}
-{% if error %}<p class="notice notice-err">{{ error }}</p>{% endif %}
-
-<section class="card">
-  <h2 class="footer-heading">Scheduled backups</h2>
-  <p class="muted small">Built-in scheduler checks every minute (UTC). When your interval has passed on a selected day, a backup runs on the <strong>Source</strong>.</p>
-  <form method="post" action="/synchronize/backup/save">
-    <label class="check"><input type="checkbox" name="enabled" {% if schedule.enabled %}checked{% endif %}> Enable scheduled backups</label>
-    <label>Interval
-      <select name="interval_minutes">
-        {% for minutes, label in interval_choices %}
-        <option value="{{ minutes }}" {% if schedule.interval_minutes == minutes %}selected{% endif %}>{{ label }}</option>
-        {% endfor %}
-      </select>
-    </label>
-    <fieldset>
-      <legend>Days (UTC)</legend>
-      <div class="day-grid">
-      {% for d in day_keys %}
-        <label class="check"><input type="checkbox" name="days" value="{{ d }}" {% if d in schedule.get_days() %}checked{% endif %}> {{ d|upper }}</label>
-      {% endfor %}
-      </div>
-    </fieldset>
-    <button type="submit">Save backup schedule</button>
-  </form>
-</section>
-
-<section class="card">
-  <h2 class="footer-heading">NPM sync (Source → Targets)</h2>
-  <p class="muted small">API-driven replication from Source to selected Targets (proxy hosts, certificates, settings, users, etc.). Restores stay under <a href="/backups">Backup / Restore</a>.</p>
-
-  <form method="post" action="/synchronize/sync-schedule/save" class="mb">
-    <label class="check"><input type="checkbox" name="sync_enabled" {% if sync_schedule.enabled %}checked{% endif %}> Enable scheduled sync</label>
-    <label>Sync interval
-      <select name="interval_minutes">
-        {% for minutes, label in interval_choices %}
-        <option value="{{ minutes }}" {% if sync_schedule.interval_minutes == minutes %}selected{% endif %}>{{ label }}</option>
-        {% endfor %}
-      </select>
-    </label>
-    <fieldset>
-      <legend>Sync days (UTC)</legend>
-      <div class="day-grid">
-      {% for d in day_keys %}
-        <label class="check"><input type="checkbox" name="sync_days" value="{{ d }}" {% if d in sync_schedule.get_days() %}checked{% endif %}> {{ d|upper }}</label>
-      {% endfor %}
-      </div>
-    </fieldset>
-    <button type="submit">Save sync schedule</button>
-  </form>
-
-  <form method="post" action="/synchronize/targets/save">
-    <table class="footer-table">
-      <thead><tr><th>Target</th><th>Scheduled sync</th><th></th></tr></thead>
-      <tbody>
-      {% for row in target_rows %}
-      {% set s = row.slave %}
-        <tr>
-          <td>{{ s.name or ('Target ' ~ s.id) }}<br><span class="muted small">{{ row.npm_host }}</span></td>
-          <td>
-            <label class="check"><input type="checkbox" name="sync_target" value="{{ s.id }}" {% if s.schedule_sync_enabled %}checked{% endif %}> Include in scheduled sync</label>
-          </td>
-          <td>
-            <button type="submit" formaction="/synchronize/sync-now/{{ s.id }}" formmethod="post">Sync now</button>
-          </td>
-        </tr>
-      {% endfor %}
-      {% if not target_rows %}
-        <tr><td colspan="3" class="muted">No targets configured. Add targets under <a href="/slaves">Targets</a>.</td></tr>
-      {% endif %}
-      </tbody>
-    </table>
-    {% if target_rows %}<button type="submit">Save target sync selection</button>{% endif %}
-  </form>
-</section>
-</div>
-{% endblock %}
+{% extends "base.html" %}
+{% block title %} - Synchronize{% endblock %}
+{% block content %}
+<div class="page-form-layout">
+<h1>Synchronize</h1>
+<p class="muted small">Mirror proxy hosts, certificates, settings, and users from Source to other NPM instances. Useful when you run more than one NPM and want them to stay aligned. All schedules use <strong>UTC</strong>.</p>
+{% if message %}<p class="notice notice-ok">{{ message }}</p>{% endif %}
+{% if error %}<p class="notice notice-err">{{ error }}</p>{% endif %}
+
+{% include "_slaves_section.html" %}
+
+<section class="card">
+  <h2 class="footer-heading">NPM sync (Source → Targets)</h2>
+  <p class="muted small">API-driven replication. This is live mirroring, not point-in-time rollback — see <a href="/snapshots">Snapshots</a> for archives.</p>
+
+  <form method="post" action="/synchronize/sync-schedule/save" class="mb">
+    <label class="check"><input type="checkbox" name="sync_enabled" {% if sync_schedule.enabled %}checked{% endif %}> Enable scheduled sync</label>
+    <label>Sync interval
+      <select name="interval_minutes">
+        {% for minutes, label in interval_choices %}
+        <option value="{{ minutes }}" {% if sync_schedule.interval_minutes == minutes %}selected{% endif %}>{{ label }}</option>
+        {% endfor %}
+      </select>
+    </label>
+    <fieldset>
+      <legend>Sync days (UTC)</legend>
+      <div class="day-grid">
+      {% for d in day_keys %}
+        <label class="check"><input type="checkbox" name="sync_days" value="{{ d }}" {% if d in sync_schedule.get_days() %}checked{% endif %}> {{ d|upper }}</label>
+      {% endfor %}
+      </div>
+    </fieldset>
+    <button type="submit">Save sync schedule</button>
+  </form>
+
+  <form method="post" action="/synchronize/targets/save">
+    <table class="footer-table">
+      <thead><tr><th>Target</th><th>Scheduled sync</th><th></th></tr></thead>
+      <tbody>
+      {% for row in target_rows %}
+      {% set s = row.slave %}
+        <tr>
+          <td>{{ s.name or ('Target ' ~ s.id) }}<br><span class="muted small">{{ row.npm_host }}</span></td>
+          <td>
+            <label class="check"><input type="checkbox" name="sync_target" value="{{ s.id }}" {% if s.schedule_sync_enabled %}checked{% endif %}> Include in scheduled sync</label>
+          </td>
+          <td>
+            <button type="submit" formaction="/synchronize/sync-now/{{ s.id }}" formmethod="post">Sync now</button>
+          </td>
+        </tr>
+      {% endfor %}
+      {% if not target_rows %}
+        <tr><td colspan="3" class="muted">Add a target above to enable sync.</td></tr>
+      {% endif %}
+      </tbody>
+    </table>
+    {% if target_rows %}<button type="submit">Save target sync selection</button>{% endif %}
+  </form>
+</section>
+</div>
+{% endblock %}

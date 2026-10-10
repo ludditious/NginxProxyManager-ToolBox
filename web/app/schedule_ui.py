@@ -8,13 +8,22 @@ INTERVAL_CHOICES = (
     (360, "Every 6 hours"),
     (720, "Every 12 hours"),
     (1440, "Every 24 hours"),
-    (10080, "Every 7 days"),
+    (10080, "Weekly"),
+    (20160, "Bi-weekly"),
+    (43200, "Monthly (~30 days)"),
+)
+
+DR_PUSH_INTERVAL_CHOICES = (
+    (1440, "Daily"),
+    (10080, "Weekly"),
+    (20160, "Bi-weekly"),
+    (43200, "Monthly (~30 days)"),
 )
 
 
 def minutes_from_form(value: str | None) -> int:
     raw = (value or "").strip()
-    for minutes, _label in INTERVAL_CHOICES:
+    for minutes, _label in (*INTERVAL_CHOICES, *DR_PUSH_INTERVAL_CHOICES):
         if str(minutes) == raw:
             return minutes
     return 1440

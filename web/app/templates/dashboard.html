@@ -1,27 +1,58 @@
-{% extends "base.html" %}
-{% block content %}
-<h1>Dashboard</h1>
-{% include "_setup_help.html" %}
-<p class="muted small">First time? Open <a href="/master">Source</a>, enter NPM admin URL and login, Test connection, then Save. Use <strong>Backup now</strong> when ready.</p>
-<form method="post" action="/backup-now" class="inline-block">
-  <button type="submit" class="primary">Backup now</button>
-</form>
-<h2>Recent runs</h2>
-{% if recent %}
-<table>
-  <thead><tr><th>When</th><th>Trigger</th><th>Result</th></tr></thead>
-  <tbody>
-  {% for r in recent %}
-    <tr>
-      <td>{{ r.started_at }}</td>
-      <td>{{ r.trigger }}</td>
-      <td>{% if r.exit_code == 0 %}OK{% else %}Failed{% endif %}</td>
-    </tr>
-  {% endfor %}
-  </tbody>
-</table>
-<p><a href="/logs">View full log</a></p>
-{% else %}
-<p class="muted">No backup runs yet. Configure the source NPM instance, then run Backup now.</p>
-{% endif %}
-{% endblock %}
+{% extends "base.html" %}
+{% block content %}
+<h1>Dashboard</h1>
+{% if is_backup_endpoint %}
+<p class="muted small">This ToolBox is a <strong>backup endpoint</strong>. Stored full backups from remote primaries appear below. Restore happens on a DR site or primary after you install NPM and ToolBox there.</p>
+<h2>Stored backups (UTC)</h2>
+{% if stored_backups %}
+<table class="footer-table">
+  <thead><tr><th>Name</th><th>Source</th><th>Created (UTC)</th><th>Size</th><th></th></tr></thead>
+  <tbody>
+  {% for b in stored_backups %}
+    <tr>
+      <td>{{ b.name }}</td>
+      <td class="muted small">{{ b.api_url or '—' }}</td>
+      <td>{{ b.created_at }}</td>
+      <td>{{ b.size_bytes }}</td>
+      <td><a href="/backups/download/{{ b.id }}">Download</a></td>
+    </tr>
+  {% endfor %}
+  </tbody>
+</table>
+{% else %}
+<p class="muted">No ingested backups yet.</p>
+{% endif %}
+{% if ingest_events %}
+<h2>Recent ingest (UTC)</h2>
+<ul class="muted small">
+{% for e in ingest_events %}
+  <li>{{ e.created_at }} — {% if e.ok %}OK{% else %}Failed{% endif %} — {{ e.source_label }} — {{ e.detail }}</li>
+{% endfor %}
+</ul>
+{% endif %}
+{% else %}
+{% include "_setup_help.html" %}
+<p class="muted small">First time? Open <a href="/master">Source</a>, enter NPM admin URL and login, Test connection, then Save. Create a <a href="/backup-restore">full backup</a> when ready.</p>
+<form method="post" action="/backup-now" class="inline-block">
+  <button type="submit" class="primary">Full backup now</button>
+</form>
+<h2>Recent runs (UTC)</h2>
+{% if recent %}
+<table>
+  <thead><tr><th>When</th><th>Trigger</th><th>Result</th></tr></thead>
+  <tbody>
+  {% for r in recent %}
+    <tr>
+      <td>{{ r.started_at }}</td>
+      <td>{{ r.trigger }}</td>
+      <td>{% if r.exit_code == 0 %}OK{% else %}Failed{% endif %}</td>
+    </tr>
+  {% endfor %}
+  </tbody>
+</table>
+<p><a href="/logs">View logs</a></p>
+{% else %}
+<p class="muted">No runs yet. Configure Source, then run a full backup.</p>
+{% endif %}
+{% endif %}
+{% endblock %}

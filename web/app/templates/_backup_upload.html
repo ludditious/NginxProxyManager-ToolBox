@@ -1,9 +1,9 @@
 <section class="card backup-section">
-  <h2 class="footer-heading">Upload & restore</h2>
-  <p class="muted small">Restore from a backup file you downloaded earlier.</p>
+  <h2 class="footer-heading">Upload snapshot</h2>
+  <p class="muted small">Upload a snapshot ZIP you downloaded earlier. Optionally restore it to Source immediately.</p>
   <form method="post" action="/backups/upload/npm" enctype="multipart/form-data" class="mb">
-    <label>NPM backup ZIP<input type="file" name="backup_file" accept=".zip,application/zip" required></label>
-    <label class="check"><input type="checkbox" name="restore_volumes" value="on"> After upload, restore volume data to Source paths</label>
+    <label>NPM snapshot ZIP<input type="file" name="backup_file" accept=".zip,application/zip" required></label>
+    <label class="check"><input type="checkbox" name="restore_volumes" value="on"> After upload, restore snapshot to Source</label>
     <button type="submit">Upload NPM backup</button>
   </form>
   <form method="post" action="/backups/upload/toolbox" enctype="multipart/form-data">

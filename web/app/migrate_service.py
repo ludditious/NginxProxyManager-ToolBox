@@ -48,7 +48,7 @@ def _token_for_ref(ref: ServerRef) -> tuple[str, str]:
 
 
 def push_npm_snapshot(db: Session, user: User, dest_ref: ServerRef) -> str:
-    row = create_npm_backup(db, user, is_automated=False)
+    row = create_npm_backup(db, user, is_automated=False, backup_kind="full")
     base, token = _token_for_ref(dest_ref)
     path = backup_file_path(row)
     with path.open("rb") as fh:

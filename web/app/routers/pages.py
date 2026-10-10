@@ -31,10 +31,10 @@ from ..models import (
 )
 from ..npm_backup_service import (
     backup_file_path,
-    create_npm_backup,
     delete_npm_backup,
-    restore_npm_volumes,
+    restore_npm_snapshot,
 )
+from ..ui_context import ROLE_BACKUP_ENDPOINT, template_nav_extras
 from ..npm_address import build_api_url_from_form, parse_api_url, validate_host
 from npmtbx.dns_resolve import (
     host_override_map_from_rows,
@@ -56,8 +56,9 @@ from ..migrate_service import run_migrate_pull, run_migrate_push, save_migrate_c
 from ..npm_sync_service import sync_source_to_target
 from ..remote_toolbox import pull_latest_from_source, push_backup_to_remote
 from ..server_registry import list_configured_servers, resolve_server_ref
-from ..schedule_ui import INTERVAL_CHOICES, minutes_from_form
+from ..schedule_ui import DR_PUSH_INTERVAL_CHOICES, INTERVAL_CHOICES, minutes_from_form
 from ..security import hash_password, verify_password
+from ..email_notify import send_test_email
 from ..services import (
     ensure_user_defaults,
     recovery_answers_for_display,
@@ -95,13 +96,32 @@ def _ctx(request: Request, user: User, **extra):
         "app_revision": read_bundled_revision(),
         "current_username": user.username,
         "update_available": session_update_available(request.session),
+        **template_nav_extras(user),
         **extra,
     }
 
 
-def _paginated_backups(db: Session, user: User, *, is_automated: bool, page: int) -> tuple:
+def _redirect_if_backup_endpoint(user: User) -> RedirectResponse | None:
+    ui = user.ui_settings
+    if ui and ui.toolbox_role == ROLE_BACKUP_ENDPOINT:
+        return RedirectResponse("/dashboard", status_code=303)
+    return None
+
+
+def _paginated_backups(
+    db: Session,
+    user: User,
+    *,
+    is_automated: bool,
+    page: int,
+    backup_kind: str,
+) -> tuple:
     page = max(1, page)
-    base = db.query(NpmBackup).filter(NpmBackup.user_id == user.id, NpmBackup.is_automated.is_(is_automated))
+    base = db.query(NpmBackup).filter(
+        NpmBackup.user_id == user.id,
+        NpmBackup.is_automated.is_(is_automated),
+        NpmBackup.backup_kind == backup_kind,
+    )
     total = base.count()
     total_pages = max(1, (total + BACKUPS_PER_PAGE - 1) // BACKUPS_PER_PAGE)
     if page > total_pages:
@@ -118,20 +138,42 @@ def _paginated_backups(db: Session, user: User, *, is_automated: bool, page: int
 @router.get("/dashboard", response_class=HTMLResponse)
 def dashboard(request: Request, user: User = Depends(get_current_user), db: Session = Depends(get_db)):
     ensure_user_defaults(db, user)
-    recent = (
-        db.query(BackupRunLog)
-        .filter(BackupRunLog.user_id == user.id)
-        .order_by(BackupRunLog.started_at.desc())
-        .limit(8)
-        .all()
-    )
-    return templates.TemplateResponse(request, "dashboard.html", _ctx(request, user, recent=recent))
+    from ..models import IngestEvent
+
+    ui = user.ui_settings
+    extra: dict = {}
+    if ui and ui.toolbox_role == ROLE_BACKUP_ENDPOINT:
+        extra["stored_backups"] = (
+            db.query(NpmBackup)
+            .filter(NpmBackup.user_id == user.id)
+            .order_by(NpmBackup.created_at.desc())
+            .limit(50)
+            .all()
+        )
+        extra["ingest_events"] = (
+            db.query(IngestEvent)
+            .filter(IngestEvent.user_id == user.id)
+            .order_by(IngestEvent.created_at.desc())
+            .limit(15)
+            .all()
+        )
+    else:
+        extra["recent"] = (
+            db.query(BackupRunLog)
+            .filter(BackupRunLog.user_id == user.id)
+            .order_by(BackupRunLog.started_at.desc())
+            .limit(8)
+            .all()
+        )
+    return templates.TemplateResponse(request, "dashboard.html", _ctx(request, user, **extra))
 
 
 @router.post("/backup-now")
 def backup_now(user: User = Depends(get_current_user), db: Session = Depends(get_db)):
     ensure_user_defaults(db, user)
-    run_user_backup(db, user, trigger="manual")
+    if blocked := _redirect_if_backup_endpoint(user):
+        return blocked
+    run_user_backup(db, user, trigger="manual", backup_kind="full")
     return RedirectResponse("/logs", status_code=303)
 
 
@@ -144,6 +186,8 @@ def master_page(
     err: str | None = None,
 ):
     ensure_user_defaults(db, user)
+    if blocked := _redirect_if_backup_endpoint(user):
+        return blocked
     master = user.master
     candidates, discover_err = discover_npm_containers()
     auto = single_high_confidence(candidates)
@@ -280,14 +324,14 @@ def slave_test(
     if sid:
         slave = db.get(SlaveInstance, int(sid))
         if not slave or slave.user_id != user.id:
-            return RedirectResponse("/slaves?err=Target%20not%20found", status_code=303)
+            return RedirectResponse("/synchronize?err=Target%20not%20found", status_code=303)
         password_enc = slave.password_enc
     try:
         api_url = build_api_url_from_form(
             npm_host, port_preset, npm_port_custom, connect_host=connect_host
         )
     except ValueError as e:
-        return RedirectResponse(f"/slaves?err={quote(str(e))}", status_code=303)
+        return RedirectResponse(f"/synchronize?err={quote(str(e))}", status_code=303)
     admin_host: str | None = None
     try:
         if (npm_host or "").strip():
@@ -305,29 +349,12 @@ def slave_test(
         admin_host=admin_host,
     )
     key = "msg" if res.ok else "err"
-    return RedirectResponse(f"/slaves?{key}={quote(res.message)}", status_code=303)
+    return RedirectResponse(f"/synchronize?{key}={quote(res.message)}", status_code=303)
 
 
-@router.get("/slaves", response_class=HTMLResponse)
-def slaves_page(request: Request, user: User = Depends(get_current_user), db: Session = Depends(get_db)):
-    ensure_user_defaults(db, user)
-    slaves = sorted(user.slaves, key=lambda s: s.sort_order)
-    slave_rows = []
-    for s in slaves:
-        h, pr, cu = parse_api_url(s.api_url)
-        ah = s.admin_host or h
-        slave_rows.append(
-            {
-                "slave": s,
-                "npm_host": ah,
-                "connect_host": s.connect_host or "",
-                "port_preset": pr,
-                "npm_port_custom": cu,
-            }
-        )
-    return templates.TemplateResponse(
-        request, "slaves.html", _ctx(request, user, slave_rows=slave_rows)
-    )
+@router.get("/slaves")
+def slaves_page():
+    return RedirectResponse("/synchronize", status_code=307)
 
 
 @router.post("/slaves/save")
@@ -354,7 +381,7 @@ def slave_save(
     if sid:
         slave = db.get(SlaveInstance, int(sid))
         if not slave or slave.user_id != user.id:
-            return RedirectResponse("/slaves?err=Not%20found", status_code=303)
+            return RedirectResponse("/synchronize?err=Not%20found", status_code=303)
     else:
         slave = SlaveInstance(user_id=user.id, sort_order=len(user.slaves))
         db.add(slave)
@@ -366,7 +393,7 @@ def slave_save(
             npm_host, port_preset, npm_port_custom, connect_host=connect_host
         )
     except ValueError as e:
-        return RedirectResponse(f"/slaves?err={quote(str(e))}", status_code=303)
+        return RedirectResponse(f"/synchronize?err={quote(str(e))}", status_code=303)
     slave.identity = identity.strip()
     enc, _ = store_secret(npm_password, slave.password_enc)
     slave.password_enc = enc
@@ -377,7 +404,7 @@ def slave_save(
     slave.verify_tls = verify_tls == "on"
     slave.enabled = enabled != "off"
     db.commit()
-    return RedirectResponse("/slaves?msg=Target%20saved", status_code=303)
+    return RedirectResponse("/synchronize?msg=Target%20saved", status_code=303)
 
 
 @router.post("/slaves/delete")
@@ -390,7 +417,7 @@ def slave_delete(
     if slave and slave.user_id == user.id:
         db.delete(slave)
         db.commit()
-    return RedirectResponse("/slaves", status_code=303)
+    return RedirectResponse("/synchronize", status_code=303)
 
 
 @router.post("/slaves/restore")
@@ -402,22 +429,43 @@ def slave_restore(
 ):
     slave = db.get(SlaveInstance, slave_id)
     if not slave or slave.user_id != user.id:
-        return RedirectResponse("/slaves?err=Target%20not%20found", status_code=303)
+        return RedirectResponse("/synchronize?err=Target%20not%20found", status_code=303)
     try:
-        lines = restore_npm_volumes(db, user, backup_id, target=slave)
+        lines = restore_npm_snapshot(db, user, backup_id, target=slave)
         msg = "; ".join(lines)
-        return RedirectResponse(f"/slaves?msg={quote(msg)}", status_code=303)
+        return RedirectResponse(f"/synchronize?msg={quote(msg)}", status_code=303)
     except ValueError as e:
-        return RedirectResponse(f"/slaves?err={quote(str(e))}", status_code=303)
+        return RedirectResponse(f"/synchronize?err={quote(str(e))}", status_code=303)
 
 
 @router.get("/remote")
 def remote_redirect():
-    return RedirectResponse("/migrate", status_code=307)
+    return RedirectResponse("/dr-sync", status_code=307)
 
 
-@router.get("/migrate", response_class=HTMLResponse)
-def migrate_page(
+@router.get("/migrate")
+def migrate_redirect():
+    return RedirectResponse("/dr-sync", status_code=307)
+
+
+def _slave_rows(user: User) -> list[dict]:
+    rows = []
+    for s in sorted(user.slaves, key=lambda x: x.sort_order):
+        h, pr, cu = parse_api_url(s.api_url)
+        rows.append(
+            {
+                "slave": s,
+                "npm_host": s.admin_host or h,
+                "connect_host": s.connect_host or "",
+                "port_preset": pr,
+                "npm_port_custom": cu,
+            }
+        )
+    return rows
+
+
+@router.get("/dr-sync", response_class=HTMLResponse)
+def dr_sync_page(
     request: Request,
     user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
@@ -425,16 +473,22 @@ def migrate_page(
     err: str | None = None,
 ):
     ensure_user_defaults(db, user)
+    if blocked := _redirect_if_backup_endpoint(user):
+        return blocked
     settings = get_settings()
-    servers = list_configured_servers(user)
+    ui = user.ui_settings
     return templates.TemplateResponse(
         request,
-        "migrate.html",
+        "dr_sync.html",
         _ctx(
             request,
             user,
-            servers=servers,
+            servers=list_configured_servers(user),
+            destinations=sorted(user.remote_destinations, key=lambda d: d.sort_order),
             ingest_secret=settings.ingest_secret,
+            public_toolbox_url=(ui.public_toolbox_url if ui else ""),
+            day_keys=DAY_KEYS,
+            dr_interval_choices=DR_PUSH_INTERVAL_CHOICES,
             message=msg,
             error=err,
         ),
@@ -534,28 +588,18 @@ def synchronize_page(
     err: str | None = None,
 ):
     ensure_user_defaults(db, user)
-    sched = user.schedule
+    if blocked := _redirect_if_backup_endpoint(user):
+        return blocked
     sync_sched = user.sync_schedule
-    target_rows = []
-    for s in sorted(user.slaves, key=lambda x: x.sort_order):
-        h, pr, cu = parse_api_url(s.api_url)
-        target_rows.append(
-            {
-                "slave": s,
-                "npm_host": s.admin_host or h,
-                "port_preset": pr,
-                "npm_port_custom": cu,
-            }
-        )
     return templates.TemplateResponse(
         request,
         "synchronize.html",
         _ctx(
             request,
             user,
-            schedule=sched,
             sync_schedule=sync_sched,
-            target_rows=target_rows,
+            target_rows=_slave_rows(user),
+            slave_rows=_slave_rows(user),
             day_keys=DAY_KEYS,
             interval_choices=INTERVAL_CHOICES,
             message=msg,
@@ -565,21 +609,14 @@ def synchronize_page(
 
 
 @router.post("/synchronize/backup/save")
-def synchronize_backup_save(
+def synchronize_backup_save_legacy(
     user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
     enabled: str | None = Form(None),
     interval_minutes: str = Form("1440"),
     days: list[str] = Form(default=[]),
 ):
-    ensure_user_defaults(db, user)
-    sched = user.schedule
-    assert sched is not None
-    sched.enabled = enabled == "on"
-    sched.interval_minutes = minutes_from_form(interval_minutes)
-    sched.set_days({d.lower() for d in days if d.lower() in DAY_KEYS})
-    db.commit()
-    return RedirectResponse("/synchronize?msg=Backup%20schedule%20saved", status_code=303)
+    return backup_restore_schedule_save(user, db, enabled, interval_minutes, days)
 
 
 @router.post("/synchronize/sync-schedule/save")
@@ -650,7 +687,7 @@ def migrate_credentials_save(
     ensure_user_defaults(db, user)
     ref = resolve_server_ref(user, server_key)
     if not ref:
-        return RedirectResponse("/migrate?err=Invalid%20server", status_code=303)
+        return RedirectResponse("/dr-sync?err=Invalid%20server", status_code=303)
     try:
         save_migrate_credentials(
             ref,
@@ -660,8 +697,8 @@ def migrate_credentials_save(
         )
         db.commit()
     except ValueError as e:
-        return RedirectResponse(f"/migrate?err={quote(str(e))}", status_code=303)
-    return RedirectResponse("/migrate?msg=Connection%20saved", status_code=303)
+        return RedirectResponse(f"/dr-sync?err={quote(str(e))}", status_code=303)
+    return RedirectResponse("/dr-sync?msg=Connection%20saved", status_code=303)
 
 
 @router.post("/migrate/push")
@@ -674,9 +711,9 @@ def migrate_push(
     ensure_user_defaults(db, user)
     try:
         msg = run_migrate_push(db, user, server_key, snapshot_type)
-        return RedirectResponse(f"/migrate?msg={quote(msg)}", status_code=303)
+        return RedirectResponse(f"/dr-sync?msg={quote(msg)}", status_code=303)
     except Exception as e:
-        return RedirectResponse(f"/migrate?err={quote(str(e))}", status_code=303)
+        return RedirectResponse(f"/dr-sync?err={quote(str(e))}", status_code=303)
 
 
 @router.post("/migrate/pull")
@@ -689,9 +726,76 @@ def migrate_pull(
     ensure_user_defaults(db, user)
     try:
         msg = run_migrate_pull(db, user, server_key, snapshot_type)
-        return RedirectResponse(f"/migrate?msg={quote(msg)}", status_code=303)
+        return RedirectResponse(f"/dr-sync?msg={quote(msg)}", status_code=303)
     except Exception as e:
-        return RedirectResponse(f"/migrate?err={quote(str(e))}", status_code=303)
+        return RedirectResponse(f"/dr-sync?err={quote(str(e))}", status_code=303)
+
+
+@router.post("/dr-sync/destination/save")
+def dr_sync_destination_save(
+    user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+    dest_id: str = Form(""),
+    name: str = Form(""),
+    base_url: str = Form(""),
+    ingest_token: str = Form(""),
+    destination_kind: str = Form("dr_site"),
+    verify_tls: str | None = Form(None),
+    enabled: str | None = Form(None),
+    push_after_backup: str | None = Form(None),
+    schedule_enabled: str | None = Form(None),
+    interval_minutes: str = Form("10080"),
+    days: list[str] = Form(default=[]),
+):
+    sk = get_settings().secret_key
+    if dest_id.strip():
+        row = db.get(RemoteToolBox, int(dest_id))
+        if not row or row.user_id != user.id:
+            return RedirectResponse("/dr-sync?err=Not%20found", status_code=303)
+    else:
+        row = RemoteToolBox(user_id=user.id, sort_order=len(user.remote_destinations))
+        db.add(row)
+    row.name = name.strip()
+    row.base_url = base_url.strip()
+    if ingest_token.strip():
+        row.ingest_token_enc = encrypt(sk, ingest_token.strip())
+    row.destination_kind = destination_kind.strip() or "dr_site"
+    row.verify_tls = verify_tls == "on"
+    row.enabled = enabled != "off"
+    row.push_after_backup = push_after_backup != "off"
+    row.schedule_enabled = schedule_enabled == "on"
+    row.interval_minutes = minutes_from_form(interval_minutes)
+    row.set_days({d.lower() for d in days if d.lower() in DAY_KEYS})
+    db.commit()
+    return RedirectResponse("/dr-sync?msg=Destination%20saved", status_code=303)
+
+
+@router.post("/dr-sync/destination/delete")
+def dr_sync_destination_delete(
+    user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+    dest_id: int = Form(...),
+):
+    row = db.get(RemoteToolBox, dest_id)
+    if row and row.user_id == user.id:
+        db.delete(row)
+        db.commit()
+    return RedirectResponse("/dr-sync?msg=Deleted", status_code=303)
+
+
+@router.post("/dr-sync/push-now")
+def dr_sync_push_now(
+    user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+    dest_id: int = Form(...),
+):
+    row = db.get(RemoteToolBox, dest_id)
+    if not row or row.user_id != user.id:
+        return RedirectResponse("/dr-sync?err=Not%20found", status_code=303)
+    log = run_user_backup(db, user, trigger="manual", backup_kind="full", push_remotes=[row])
+    if log.exit_code != 0:
+        return RedirectResponse(f"/dr-sync?err={quote(log.body[:200])}", status_code=303)
+    return RedirectResponse("/dr-sync?msg=Pushed", status_code=303)
 
 
 @router.get("/logs", response_class=HTMLResponse)
@@ -706,8 +810,13 @@ def logs_page(request: Request, user: User = Depends(get_current_user), db: Sess
     return templates.TemplateResponse(request, "logs.html", _ctx(request, user, logs=rows))
 
 
-@router.get("/backups", response_class=HTMLResponse)
-def backups_page(
+@router.get("/backups")
+def backups_redirect():
+    return RedirectResponse("/snapshots", status_code=307)
+
+
+@router.get("/snapshots", response_class=HTMLResponse)
+def snapshots_page(
     request: Request,
     user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
@@ -716,21 +825,23 @@ def backups_page(
     msg: str | None = None,
     err: str | None = None,
 ):
-    manual, mp, mpages, mtotal = _paginated_backups(db, user, is_automated=False, page=manual_page)
-    auto, ap, apages, atotal = _paginated_backups(db, user, is_automated=True, page=auto_page)
-    toolbox = (
-        db.query(ToolBoxBackup)
-        .filter(ToolBoxBackup.user_id == user.id)
-        .order_by(ToolBoxBackup.created_at.desc())
-        .limit(12)
-        .all()
+    ensure_user_defaults(db, user)
+    if blocked := _redirect_if_backup_endpoint(user):
+        return blocked
+    manual, mp, mpages, mtotal = _paginated_backups(
+        db, user, is_automated=False, page=manual_page, backup_kind="snapshot"
     )
+    auto, ap, apages, atotal = _paginated_backups(
+        db, user, is_automated=True, page=auto_page, backup_kind="snapshot"
+    )
+    snap_sched = user.snapshot_schedule
     return templates.TemplateResponse(
         request,
-        "backups.html",
+        "snapshots.html",
         _ctx(
             request,
             user,
+            snapshot_schedule=snap_sched,
             manual_backups=manual,
             manual_page=mp,
             manual_pages=mpages,
@@ -739,31 +850,161 @@ def backups_page(
             auto_page=ap,
             auto_pages=apages,
             auto_total=atotal,
-            toolbox_backups=toolbox,
+            day_keys=DAY_KEYS,
+            interval_choices=INTERVAL_CHOICES,
+            backup_retention_options=BACKUP_RETENTION_OPTIONS,
             message=msg or err,
             message_class="notice notice-ok" if msg else ("notice notice-err" if err else ""),
         ),
     )
 
 
-@router.post("/backups/create")
-def backups_create(user: User = Depends(get_current_user), db: Session = Depends(get_db)):
-    run_user_backup(db, user, trigger="manual")
-    return RedirectResponse("/backups?msg=Backup%20created", status_code=303)
+@router.post("/snapshots/schedule/save")
+def snapshots_schedule_save(
+    user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+    enabled: str | None = Form(None),
+    interval_minutes: str = Form("1440"),
+    retention_days: str = Form("30"),
+    days: list[str] = Form(default=[]),
+):
+    ensure_user_defaults(db, user)
+    sched = user.snapshot_schedule
+    assert sched is not None
+    sched.enabled = enabled == "on"
+    sched.interval_minutes = minutes_from_form(interval_minutes)
+    sched.retention_days = retention_days_from_form(retention_days)
+    sched.set_days({d.lower() for d in days if d.lower() in DAY_KEYS})
+    db.commit()
+    return RedirectResponse("/snapshots?msg=Snapshot%20schedule%20saved", status_code=303)
 
 
-@router.post("/backups/upload/npm")
-async def backups_upload_npm(
+@router.post("/snapshots/create")
+def snapshots_create(user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    run_user_backup(db, user, trigger="manual", backup_kind="snapshot")
+    return RedirectResponse("/snapshots?msg=Snapshot%20created", status_code=303)
+
+
+@router.post("/snapshots/upload")
+async def snapshots_upload(
     user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
     backup_file: UploadFile = File(...),
-    restore_volumes: str | None = Form(None),
 ):
     from ..services import ingest_snapshot_file
 
     raw = await backup_file.read()
     if not raw:
-        return RedirectResponse("/backups?err=Empty%20file", status_code=303)
+        return RedirectResponse("/snapshots?err=Empty%20file", status_code=303)
+    name = backup_file.filename or "upload.zip"
+    ingest_snapshot_file(
+        db,
+        file_name=name,
+        file_bytes=raw,
+        name=name,
+        snapshot_id="",
+    )
+    return RedirectResponse("/snapshots?msg=Uploaded", status_code=303)
+
+
+@router.post("/snapshots/restore")
+def snapshots_restore(
+    user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+    backup_id: int = Form(...),
+):
+    try:
+        lines = restore_npm_snapshot(db, user, backup_id)
+        return RedirectResponse(f"/snapshots?msg={quote('; '.join(lines))}", status_code=303)
+    except ValueError as e:
+        return RedirectResponse(f"/snapshots?err={quote(str(e))}", status_code=303)
+
+
+@router.get("/backup-restore", response_class=HTMLResponse)
+def backup_restore_page(
+    request: Request,
+    user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+    manual_page: int = 1,
+    auto_page: int = 1,
+    msg: str | None = None,
+    err: str | None = None,
+):
+    ensure_user_defaults(db, user)
+    if blocked := _redirect_if_backup_endpoint(user):
+        return blocked
+    manual, mp, mpages, mtotal = _paginated_backups(
+        db, user, is_automated=False, page=manual_page, backup_kind="full"
+    )
+    auto, ap, apages, atotal = _paginated_backups(
+        db, user, is_automated=True, page=auto_page, backup_kind="full"
+    )
+    npm_settings = user.npm_backup_settings
+    return templates.TemplateResponse(
+        request,
+        "backup_restore.html",
+        _ctx(
+            request,
+            user,
+            schedule=user.schedule,
+            retention_days=npm_settings.retention_days if npm_settings else 30,
+            manual_backups=manual,
+            manual_page=mp,
+            manual_pages=mpages,
+            manual_total=mtotal,
+            auto_backups=auto,
+            auto_page=ap,
+            auto_pages=apages,
+            auto_total=atotal,
+            day_keys=DAY_KEYS,
+            interval_choices=INTERVAL_CHOICES,
+            backup_retention_options=BACKUP_RETENTION_OPTIONS,
+            message=msg or err,
+            message_class="notice notice-ok" if msg else ("notice notice-err" if err else ""),
+        ),
+    )
+
+
+@router.post("/backup-restore/schedule/save")
+def backup_restore_schedule_save(
+    user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+    enabled: str | None = Form(None),
+    interval_minutes: str = Form("1440"),
+    retention_days: str = Form("30"),
+    days: list[str] = Form(default=[]),
+):
+    ensure_user_defaults(db, user)
+    sched = user.schedule
+    assert sched is not None
+    sched.enabled = enabled == "on"
+    sched.interval_minutes = minutes_from_form(interval_minutes)
+    sched.set_days({d.lower() for d in days if d.lower() in DAY_KEYS})
+    settings = user.npm_backup_settings
+    assert settings is not None
+    settings.retention_days = retention_days_from_form(retention_days)
+    db.commit()
+    return RedirectResponse("/backup-restore?msg=Backup%20schedule%20saved", status_code=303)
+
+
+@router.post("/backup-restore/create")
+def backup_restore_create(user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    run_user_backup(db, user, trigger="manual", backup_kind="full")
+    return RedirectResponse("/backup-restore?msg=Full%20backup%20created", status_code=303)
+
+
+@router.post("/backup-restore/upload")
+async def backup_restore_upload(
+    user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+    backup_file: UploadFile = File(...),
+    restore_after: str | None = Form(None),
+):
+    from ..services import ingest_snapshot_file
+
+    raw = await backup_file.read()
+    if not raw:
+        return RedirectResponse("/backup-restore?err=Empty%20file", status_code=303)
     name = backup_file.filename or "upload.zip"
     row = ingest_snapshot_file(
         db,
@@ -772,14 +1013,33 @@ async def backups_upload_npm(
         name=name,
         snapshot_id="",
     )
-    msg = f"Uploaded NPM backup {row.name}"
-    if restore_volumes == "on":
+    msg = f"Uploaded {row.name}"
+    if restore_after == "on":
         try:
-            lines = restore_npm_volumes(db, user, row.id)
+            lines = restore_npm_snapshot(db, user, row.id)
             msg = f"{msg}; {'; '.join(lines)}"
         except Exception as e:
-            return RedirectResponse(f"/backups?err={quote(str(e))}", status_code=303)
-    return RedirectResponse(f"/backups?msg={quote(msg)}", status_code=303)
+            return RedirectResponse(f"/backup-restore?err={quote(str(e))}", status_code=303)
+    return RedirectResponse(f"/backup-restore?msg={quote(msg)}", status_code=303)
+
+
+@router.post("/backup-restore/restore")
+def backup_restore_restore(
+    user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+    backup_id: int = Form(...),
+):
+    try:
+        lines = restore_npm_snapshot(db, user, backup_id)
+        return RedirectResponse(f"/backup-restore?msg={quote('; '.join(lines))}", status_code=303)
+    except ValueError as e:
+        return RedirectResponse(f"/backup-restore?err={quote(str(e))}", status_code=303)
+
+
+@router.post("/backups/create")
+def backups_create_legacy(user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    run_user_backup(db, user, trigger="manual", backup_kind="full")
+    return RedirectResponse("/backup-restore?msg=Full%20backup%20created", status_code=303)
 
 
 @router.post("/backups/upload/toolbox")
@@ -839,16 +1099,16 @@ def backups_delete(
 
 
 @router.post("/backups/restore-master")
-def backups_restore_master(
+def backups_restore_master_legacy(
     user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
     backup_id: int = Form(...),
 ):
     try:
-        lines = restore_npm_volumes(db, user, backup_id)
-        return RedirectResponse(f"/backups?msg={quote('; '.join(lines))}", status_code=303)
+        lines = restore_npm_snapshot(db, user, backup_id)
+        return RedirectResponse(f"/backup-restore?msg={quote('; '.join(lines))}", status_code=303)
     except ValueError as e:
-        return RedirectResponse(f"/backups?err={quote(str(e))}", status_code=303)
+        return RedirectResponse(f"/backup-restore?err={quote(str(e))}", status_code=303)
 
 
 @router.post("/backups/push")
@@ -926,7 +1186,7 @@ def settings_page(
     ensure_user_defaults(db, user)
     sk = get_settings().secret_key
     settings = get_settings()
-    npm_settings = user.npm_backup_settings
+    ui = user.ui_settings
     dns_settings = user.npm_dns_settings
     smtp = user.smtp_settings
     prefs = user.notification_prefs
@@ -943,10 +1203,15 @@ def settings_page(
             recovery_reenter=user_has_recovery(user) and not any(recovery_answers_for_display(user, sk)),
             recovery_configured=user_has_recovery(user),
             check_updates_on_login=user.check_updates_on_login,
-            auto_backup_enabled=npm_settings.enabled if npm_settings else False,
-            auto_backup_retention_days=npm_settings.retention_days if npm_settings else 30,
-            include_api=npm_settings.include_api if npm_settings else True,
-            include_volumes=npm_settings.include_volumes if npm_settings else True,
+            toolbox_role=ui.toolbox_role if ui else "primary",
+            public_toolbox_url=ui.public_toolbox_url if ui else "",
+            nav_show_source=ui.nav_show_source if ui else True,
+            nav_show_snapshots=ui.nav_show_snapshots if ui else True,
+            nav_show_synchronize=ui.nav_show_synchronize if ui else True,
+            nav_show_backup_restore=ui.nav_show_backup_restore if ui else True,
+            nav_show_dr_sync=ui.nav_show_dr_sync if ui else True,
+            nav_show_logs=ui.nav_show_logs if ui else True,
+            endpoint_retention_days=ui.endpoint_retention_days if ui else 30,
             dns_use_custom=dns_settings.use_custom_dns if dns_settings else False,
             dns_servers=dns_settings.dns_servers if dns_settings else "",
             host_overrides_enabled=dns_settings.use_host_overrides if dns_settings else False,
@@ -1056,24 +1321,54 @@ def settings_host_overrides(
     return RedirectResponse("/settings?msg=Host%20override%20settings%20saved", status_code=303)
 
 
-@router.post("/settings/automated-backup")
-def settings_auto_backup(
+@router.post("/settings/ui")
+def settings_ui(
     user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
-    auto_backup_enabled: str | None = Form(None),
-    auto_backup_retention: str = Form("30"),
-    include_api: str | None = Form(None),
-    include_volumes: str | None = Form(None),
+    toolbox_role: str = Form("primary"),
+    public_toolbox_url: str = Form(""),
+    nav_show_source: str | None = Form(None),
+    nav_show_snapshots: str | None = Form(None),
+    nav_show_synchronize: str | None = Form(None),
+    nav_show_backup_restore: str | None = Form(None),
+    nav_show_dr_sync: str | None = Form(None),
+    nav_show_logs: str | None = Form(None),
+    endpoint_retention_days: str = Form("30"),
 ):
     ensure_user_defaults(db, user)
-    row = user.npm_backup_settings
-    assert row is not None
-    row.enabled = auto_backup_enabled == "on"
-    row.retention_days = retention_days_from_form(auto_backup_retention)
-    row.include_api = include_api != "off"
-    row.include_volumes = include_volumes != "off"
+    ui = user.ui_settings
+    assert ui is not None
+    role = toolbox_role.strip() or "primary"
+    if role not in ("primary", "backup_endpoint", "dr_site"):
+        role = "primary"
+    ui.toolbox_role = role
+    ui.public_toolbox_url = public_toolbox_url.strip()
+    ui.nav_show_source = nav_show_source == "on"
+    ui.nav_show_snapshots = nav_show_snapshots == "on"
+    ui.nav_show_synchronize = nav_show_synchronize == "on"
+    ui.nav_show_backup_restore = nav_show_backup_restore == "on"
+    ui.nav_show_dr_sync = nav_show_dr_sync == "on"
+    ui.nav_show_logs = nav_show_logs == "on"
+    ui.endpoint_retention_days = retention_days_from_form(endpoint_retention_days)
     db.commit()
-    return RedirectResponse("/settings?msg=Backup%20settings%20saved", status_code=303)
+    return RedirectResponse("/settings?msg=Role%20and%20navigation%20saved", status_code=303)
+
+
+@router.post("/settings/smtp/test")
+def settings_smtp_test(
+    user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+    test_to: str = Form(""),
+):
+    ensure_user_defaults(db, user)
+    to_addr = test_to.strip()
+    if not to_addr:
+        return RedirectResponse("/settings?err=Test%20recipient%20required", status_code=303)
+    try:
+        send_test_email(user, to_addr)
+    except Exception as e:
+        return RedirectResponse(f"/settings?err={quote(str(e))}", status_code=303)
+    return RedirectResponse("/settings?msg=Test%20email%20sent", status_code=303)
 
 
 @router.post("/settings/updates")
