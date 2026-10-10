@@ -11,6 +11,7 @@ from pathlib import Path
 from sqlalchemy.orm import Session
 
 from npmtbx.backup_limits import MIN_FULL_BACKUP_ZIP_BYTES
+from npmtbx.docker_host_volumes import restore_npm_from_backup_zip
 from npmtbx.restore_validation import (
     DATA_MEMBER,
     LE_MEMBER,
@@ -29,8 +30,9 @@ from .config import get_settings
 from .docker_control import restart_container, start_container, stop_container
 from .docker_discover import discover_npm_containers
 from .local_volume_paths import apply_mount_defaults, validate_full_backup_paths
-from .mount_diagnostics import diagnose_local_npm_mounts
+from .mount_diagnostics import diagnose_local_npm_mounts, resolve_path_on_docker_host
 from .npm_full_backup_prep import (
+    sync_local_npm_from_detect,
     container_ids_for_archive,
     mount_hint_from_candidates,
     prepare_local_for_full_backup,
@@ -86,7 +88,8 @@ def create_npm_backup(
         mount_diag.assert_ready_for_full_backup()
         extra_container_ids = container_ids_for_archive(local, docker_candidates)
         container_label = (local.docker_container_id or container_label)[:12]
-        validate_full_backup_paths(local.data_path, local.letsencrypt_path)
+        if mount_diag.ready_for_disk_backup:
+            validate_full_backup_paths(local.data_path, local.letsencrypt_path)
         include_api = False
         include_volumes = True
         api_export: dict = {}
@@ -214,11 +217,6 @@ def restore_npm_snapshot(
     if has_data or has_le:
         data_path = (inst.data_path or "").strip()
         le_path = (inst.letsencrypt_path or "").strip()
-        if has_data and not data_path:
-            raise ValueError("Backup includes /data but local data path is not configured.")
-        if has_le and not le_path:
-            raise ValueError("Backup includes certificates but local certificates path is not configured.")
-
         approval = approve_destructive_volume_restore(
             zip_path,
             restore_data=has_data,
@@ -226,10 +224,28 @@ def restore_npm_snapshot(
             record_size_bytes=row.size_bytes or 0,
         )
 
+        mount_diag = None
         if isinstance(inst, LocalNpmBackup):
             candidates, _ = discover_npm_containers(probe_api=False)
+            sync_local_npm_from_detect(db, inst, candidates)
             mount_diag = diagnose_local_npm_mounts(inst, candidates)
             mount_diag.assert_ready_for_volume_restore()
+            if mount_diag.ready_for_docker_backup and not mount_diag.ready_for_disk_backup:
+                cid = (inst.docker_container_id or mount_diag.npm_container_id or "").strip()
+                docker_lines = restore_npm_from_backup_zip(
+                    cid,
+                    zip_path,
+                    restore_data=has_data,
+                    restore_letsencrypt=has_le,
+                    host_path_resolver=resolve_path_on_docker_host,
+                )
+                lines.extend(docker_lines)
+                lines.insert(0, "Restored NPM on this server from backup (Docker)")
+                return lines
+            if has_data and not data_path:
+                raise ValueError("Backup includes /data but local data path is not configured.")
+            if has_le and not le_path:
+                raise ValueError("Backup includes certificates but local certificates path is not configured.")
 
         container_id = (inst.docker_container_id or "").strip()
         stopped = False

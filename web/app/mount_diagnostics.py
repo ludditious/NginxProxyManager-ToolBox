@@ -17,6 +17,20 @@ def _norm_host_path(path: str) -> str:
     return os.path.normpath((path or "").strip())
 
 
+def resolve_path_on_docker_host(path: Path) -> str:
+    """Map a path inside ToolBox to the path the Docker daemon uses on the host."""
+    p = path.resolve()
+    for anchor in [p, *p.parents]:
+        if str(anchor) == anchor.anchor:
+            break
+        src = toolbox_bind_source(str(anchor))
+        if src:
+            return str(Path(src) / p.relative_to(anchor))
+    raise ValueError(
+        f"Cannot resolve {p} on the Docker host — store backups on a mounted /data volume."
+    )
+
+
 def _is_host_folder_bind_source(src: str) -> bool:
     s = (src or "").strip()
     if not s.startswith("/"):
@@ -98,9 +112,13 @@ class MountDiagnostic:
     host_data_paths_match: bool
     host_letsencrypt_paths_match: bool
     ready_for_disk_backup: bool
+    ready_for_docker_backup: bool
     docker_socket_available: bool
-    can_try_docker_export: bool
     stale_container_link: bool = False
+
+    @property
+    def can_try_docker_export(self) -> bool:
+        return self.ready_for_docker_backup
 
     def report_lines(self) -> list[str]:
         if self.npm_container_name:
@@ -124,22 +142,21 @@ class MountDiagnostic:
                 + ("yes" if self.host_data_paths_match else "NO — backup would not read NPM data")
             )
         elif self.npm_data_host and not self.toolbox_data_host:
-            lines.append("Host /data paths match: NO — ToolBox /npm-data is not bind-mounted to that folder")
-        if not self.ready_for_disk_backup:
-            if self.npm_data_host and not self.host_data_paths_match:
-                lines.append(
-                    f"Fix ToolBox run, e.g. -v {self.npm_data_host}:{self.toolbox_data_path}"
-                )
-            elif not self.sqlite_present:
-                lines.append(
-                    "ToolBox /npm-data is empty or wrong — bind the same folder NPM uses for /data."
-                )
-            if self.can_try_docker_export:
-                lines.append(
-                    "Fallback: ToolBox may read /data via Docker export (requires docker.sock)."
-                )
-            elif not self.docker_socket_available:
-                lines.append("Docker socket not available — cannot export /data from NPM container.")
+            lines.append(
+                "Optional bind mount: not set (same-host backup/restore can still use Docker)."
+            )
+        if self.ready_for_docker_backup:
+            lines.append(
+                "Same-host mode: ToolBox can read/write NPM /data via docker.sock (no /npm-data bind required)."
+            )
+        elif not self.docker_socket_available:
+            lines.append(
+                "Add -v /var/run/docker.sock:/var/run/docker.sock:ro to ToolBox, or bind NPM /data into /npm-data."
+            )
+        elif not self.npm_data_host:
+            lines.append("Link NPM container (auto-detect on this page) so ToolBox knows which container to use.")
+        if self.ready_for_disk_backup:
+            lines.append("Direct disk backup: /npm-data bind matches NPM (fastest).")
         return lines
 
     @staticmethod
@@ -153,28 +170,14 @@ class MountDiagnostic:
         return f"{n / (1024 * 1024 * 1024):.2f} GB"
 
     def assert_ready_for_full_backup(self) -> None:
-        if self.ready_for_disk_backup:
+        if self.ready_for_disk_backup or self.ready_for_docker_backup:
             return
-        if self.can_try_docker_export:
-            return
-        raise ValueError("Full backup blocked — mount check failed.\n" + "\n".join(self.report_lines()))
+        raise ValueError("Full backup blocked.\n" + "\n".join(self.report_lines()))
 
     def assert_ready_for_volume_restore(self) -> None:
-        if not self.npm_data_host:
-            raise ValueError(
-                "Restore blocked: NPM container /data host path unknown. "
-                "Link NPM on Backup / Restore and ensure docker.sock is mounted."
-            )
-        if not self.toolbox_data_host:
-            raise ValueError(
-                "Restore blocked: ToolBox /npm-data is not bind-mounted to the host. "
-                + "\n".join(self.report_lines())
-            )
-        if not self.host_data_paths_match:
-            raise ValueError(
-                "Restore blocked: ToolBox would write to the wrong folder.\n"
-                + "\n".join(self.report_lines())
-            )
+        if self.ready_for_disk_backup or self.ready_for_docker_backup:
+            return
+        raise ValueError("Restore blocked.\n" + "\n".join(self.report_lines()))
 
 
 def _docker_available() -> bool:
@@ -259,8 +262,8 @@ def diagnose_local_npm_mounts(
     match_le = bool(le_norm_n and le_norm_t and le_norm_n == le_norm_t) or (not le_norm_n and not le_norm_t)
 
     sock = _docker_available()
-    ready = sqlite and match_data and tb_bytes > 4096
-    export_ok = sock and bool(cid) and not ready
+    ready_disk = sqlite and match_data and tb_bytes > 4096
+    ready_docker = sock and bool(cid) and bool(npm_data_host)
 
     return MountDiagnostic(
         npm_container_name=cname,
@@ -275,8 +278,8 @@ def diagnose_local_npm_mounts(
         toolbox_data_bytes=tb_bytes,
         host_data_paths_match=match_data,
         host_letsencrypt_paths_match=match_le,
-        ready_for_disk_backup=ready,
+        ready_for_disk_backup=ready_disk,
+        ready_for_docker_backup=ready_docker,
         docker_socket_available=sock,
-        can_try_docker_export=export_ok,
         stale_container_link=stale_link,
     )

@@ -8,7 +8,7 @@
 
 <p class="muted small">Backs up <strong>NPM on this server</strong> — the <code>/data</code> and certificate folders ToolBox can read, plus Docker container info. Restore puts those folders back and restarts the NPM container. Not related to Sync Source. Schedules use <strong>UTC</strong>.</p>
 
-<p class="muted small">ToolBox must mount the same host folders as NPM, e.g. <code>-v …/npm/data:/npm-data</code> and <code>-v …/npm/letsencrypt:/npm-letsencrypt</code>, plus <code>-v /var/run/docker.sock:/var/run/docker.sock:ro</code>.</p>
+<p class="muted small">On the same Docker host, ToolBox only needs <code>-v /var/run/docker.sock:/var/run/docker.sock:ro</code> to back up and restore NPM. Optional: bind NPM folders into <code>/npm-data</code> for faster direct disk access.</p>
 
 {% if message %}
 
@@ -27,18 +27,17 @@
 {% if mount_diag %}
 <section class="card panel-wide">
   <h2 class="footer-heading">Mount check (before backup or restore)</h2>
-  <p class="muted small">Detect reads <strong>NPM’s</strong> folders from Docker. It cannot change <strong>ToolBox’s</strong> own <code>docker run</code> — you must add the <code>-v host:…/npm-data</code> line on the Debian host once, then recreate this container.</p>
   <ul class="small">
   {% for line in mount_diag.report_lines() %}
     <li{% if 'NO' in line or 'not bind' in line %} class="danger-text"{% endif %}>{{ line }}</li>
   {% endfor %}
   </ul>
   {% if mount_diag.ready_for_disk_backup %}
-  <p class="notice notice-ok">Ready for full backup from disk.</p>
-  {% elif mount_diag.can_try_docker_export %}
-  <p class="notice notice-warn">Disk path not ready; backup may use Docker export only.</p>
+  <p class="notice notice-ok">Ready — full backup/restore via /npm-data bind.</p>
+  {% elif mount_diag.ready_for_docker_backup %}
+  <p class="notice notice-ok">Ready — full backup/restore via Docker (docker.sock only).</p>
   {% else %}
-  <p class="notice notice-err">Not ready — fix ToolBox <code>docker run</code> volumes before backup or restore.</p>
+  <p class="notice notice-err">Not ready — add docker.sock to ToolBox and ensure NPM is detected.</p>
   {% endif %}
 </section>
 {% endif %}
