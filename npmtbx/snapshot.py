@@ -15,6 +15,7 @@ from typing import Any
 
 from .backup_format import build_manifest
 from .backup_limits import MIN_VOLUME_TAR_GZ_BYTES
+from .docker_client import get_docker_client
 
 NPM_DATA_MARKER = "database.sqlite"
 
@@ -53,9 +54,7 @@ def _archive_from_container(container_id: str, container_path: str, dest_tar_gz:
     if not cid:
         return False, "no container id"
     try:
-        import docker
-
-        container = docker.from_env().containers.get(cid)
+        container = get_docker_client().containers.get(cid)
         stream, _ = container.get_archive(container_path)
         raw_tar = b"".join(stream)
         if not raw_tar:
@@ -181,9 +180,7 @@ def create_snapshot_zip(
             docker_dir.mkdir(exist_ok=True)
             inspect_path = docker_dir / "container-inspect.json"
             try:
-                import docker
-
-                container = docker.from_env().containers.get(docker_container_id.strip())
+                container = get_docker_client().containers.get(docker_container_id.strip())
                 inspect_path.write_text(
                     json.dumps(container.attrs, ensure_ascii=False, indent=2),
                     encoding="utf-8",

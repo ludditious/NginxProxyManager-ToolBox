@@ -1009,7 +1009,7 @@ def backup_restore_page(
     manual, mp, mpages, mtotal = _paginated_backups(
         db, user, is_automated=False, page=manual_page, backup_kind="full"
     )
-    auto, ap, apages, atotal = _paginated_backups(
+    auto_backups, ap, apages, atotal = _paginated_backups(
         db, user, is_automated=True, page=auto_page, backup_kind="full"
     )
     local = user.local_npm
@@ -1017,7 +1017,9 @@ def backup_restore_page(
     if local:
         sync_local_npm_from_detect(db, local, candidates)
         db.refresh(local)
-    auto = single_high_confidence(candidates)
+    auto_candidate = single_high_confidence(candidates) or (
+        candidates[0] if len(candidates) == 1 else None
+    )
     mount_diag = diagnose_local_npm_mounts(local, candidates) if local else None
     npm_settings = user.npm_backup_settings
     return templates.TemplateResponse(
@@ -1029,7 +1031,7 @@ def backup_restore_page(
             local=local,
             candidates=candidates,
             discover_err=discover_err,
-            auto_candidate=auto,
+            auto_candidate=auto_candidate,
             mount_diag=mount_diag,
             schedule=user.schedule,
             retention_days=npm_settings.retention_days if npm_settings else 30,
@@ -1037,7 +1039,7 @@ def backup_restore_page(
             manual_page=mp,
             manual_pages=mpages,
             manual_total=mtotal,
-            auto_backups=auto,
+            auto_backups=auto_backups,
             auto_page=ap,
             auto_pages=apages,
             auto_total=atotal,

@@ -37,7 +37,7 @@
   {% elif mount_diag.ready_for_docker_backup %}
   <p class="notice notice-ok">Ready — full backup/restore via Docker (docker.sock only).</p>
   {% else %}
-  <p class="notice notice-err">Not ready — add docker.sock to ToolBox and ensure NPM is detected.</p>
+  <p class="notice notice-err">Not ready — mount <code>docker.sock</code>, open this page so NPM is detected/linked, then refresh.</p>
   {% endif %}
 </section>
 {% endif %}
@@ -118,7 +118,7 @@
 
     </label>
 
-    <p class="muted small">Click <strong>Save</strong> after changing paths. With the usual <code>/npm-data</code> bind mounts, manual backup can detect them without Save.</p>
+    <p class="muted small">Paths default to <code>/npm-data</code> inside ToolBox (optional bind). With only <code>docker.sock</code>, leave them as-is — full backup uses Docker export from the linked NPM container.</p>
 
     <button type="submit">Save</button>
 

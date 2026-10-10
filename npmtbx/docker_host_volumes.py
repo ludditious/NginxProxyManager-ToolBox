@@ -17,10 +17,10 @@ class ContainerMount:
 
 
 def get_container_mount(container_id: str, destination: str) -> ContainerMount | None:
-    import docker
+    from .docker_client import get_docker_client
 
     dest = destination.rstrip("/") or "/"
-    container = docker.from_env().containers.get(container_id.strip())
+    container = get_docker_client().containers.get(container_id.strip())
     for raw in container.attrs.get("Mounts") or []:
         if not isinstance(raw, dict):
             continue
@@ -45,7 +45,7 @@ def _volume_map(mount: ContainerMount) -> dict:
 
 def restore_tar_gz_to_mount(mount: ContainerMount, host_tar_path: str) -> None:
     """Replace NPM volume contents via helper container; tar must be on a Docker-host path."""
-    import docker
+    from .docker_client import get_docker_client
 
     tar_path = Path(host_tar_path)
     name = tar_path.name
@@ -56,7 +56,7 @@ def restore_tar_gz_to_mount(mount: ContainerMount, host_tar_path: str) -> None:
     )
     volumes = _volume_map(mount)
     volumes[host_dir] = {"bind": "/backup", "mode": "ro"}
-    client = docker.from_env()
+    client = get_docker_client()
     client.containers.run(
         "alpine:3.20",
         command=["sh", "-c", script],
@@ -81,19 +81,22 @@ def restore_npm_from_backup_zip(
     restore_data: bool,
     restore_letsencrypt: bool,
     host_path_resolver,
+    staging_dir: Path | None = None,
 ) -> list[str]:
-    import docker
+    from .docker_client import get_docker_client
 
     lines: list[str] = []
     cid = container_id.strip()
-    client = docker.from_env()
+    client = get_docker_client()
     npm = client.containers.get(cid)
     was_running = npm.status == "running"
     if was_running:
         npm.stop(timeout=120)
         lines.append(f"Stopped NPM container {cid[:12]}")
     try:
-        with tempfile.TemporaryDirectory(prefix="npmtbx-docker-restore-") as td:
+        stage_root = staging_dir or Path("/data/backups")
+        stage_root.mkdir(parents=True, exist_ok=True)
+        with tempfile.TemporaryDirectory(prefix="npmtbx-docker-restore-", dir=str(stage_root)) as td:
             tmp = Path(td)
             if restore_data:
                 mount = get_container_mount(cid, "/data")

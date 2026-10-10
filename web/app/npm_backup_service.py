@@ -143,7 +143,7 @@ def create_npm_backup(
             raise ValueError(
                 f"Full backup ZIP is only {zip_size} bytes (need at least "
                 f"{MIN_FULL_BACKUP_ZIP_BYTES // 1024} KB). NPM /data was not captured — "
-                "fix /npm-data mounts or Docker link, then try again."
+                "check docker.sock, NPM detection on Backup / Restore, then try again."
             )
 
     row = NpmBackup(
@@ -232,12 +232,14 @@ def restore_npm_snapshot(
             mount_diag.assert_ready_for_volume_restore()
             if mount_diag.ready_for_docker_backup and not mount_diag.ready_for_disk_backup:
                 cid = (inst.docker_container_id or mount_diag.npm_container_id or "").strip()
+                settings = get_settings()
                 docker_lines = restore_npm_from_backup_zip(
                     cid,
                     zip_path,
                     restore_data=has_data,
                     restore_letsencrypt=has_le,
                     host_path_resolver=resolve_path_on_docker_host,
+                    staging_dir=settings.backups_dir / ".restore-work",
                 )
                 lines.extend(docker_lines)
                 lines.insert(0, "Restored NPM on this server from backup (Docker)")

@@ -7,6 +7,9 @@ from dataclasses import dataclass
 from typing import Any
 
 from npmtbx.client import NpmClient
+from npmtbx.docker_mounts import mount_dest_map
+
+from .docker_client import get_docker_client, ping_docker
 
 DOCKER_DISCOVER_HELP = (
     "Docker detect needs /var/run/docker.sock mounted into this ToolBox container (read-only is fine). "
@@ -32,16 +35,6 @@ class NpmCandidate:
     suggested_api_url: str
     admin_port: str
     notes: str
-
-
-def _mount_dest_map(mounts: list[Any]) -> dict[str, str]:
-    out: dict[str, str] = {}
-    for m in mounts:
-        dest = getattr(m, "Destination", None) or (m.get("Destination") if isinstance(m, dict) else None)
-        src = getattr(m, "Source", None) or (m.get("Source") if isinstance(m, dict) else None)
-        if dest and src:
-            out[str(dest).rstrip("/")] = str(src)
-    return out
 
 
 def _published_port(ports: dict | None) -> str:
@@ -71,8 +64,11 @@ def discover_npm_containers(*, probe_api: bool = True) -> tuple[list[NpmCandidat
     except ImportError:
         return [], "Docker Python module is not installed."
 
+    ok, detail = ping_docker()
+    if not ok:
+        return [], detail if detail.startswith("Cannot") else _friendly_docker_error(Exception(detail))
     try:
-        client = docker.from_env()
+        client = get_docker_client()
     except Exception as e:
         return [], _friendly_docker_error(e)
 
@@ -86,7 +82,7 @@ def discover_npm_containers(*, probe_api: bool = True) -> tuple[list[NpmCandidat
         try:
             attrs = c.attrs or {}
             image = (attrs.get("Config") or {}).get("Image") or c.image.tags[0] if c.image.tags else ""
-            mounts = _mount_dest_map((attrs.get("Mounts") or []))
+            mounts = mount_dest_map((attrs.get("Mounts") or []))
             data_path = mounts.get("/data", "")
             le_path = mounts.get("/etc/letsencrypt", "")
             ports = attrs.get("NetworkSettings", {}).get("Ports") or {}

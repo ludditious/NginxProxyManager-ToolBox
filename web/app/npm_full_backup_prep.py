@@ -27,6 +27,17 @@ def _pick_candidate(candidates: list[NpmCandidate]) -> NpmCandidate | None:
     medium = [c for c in candidates if c.confidence in ("high", "medium")]
     if len(medium) == 1:
         return medium[0]
+    by_name = [
+        c
+        for c in candidates
+        if "nginx-proxy-manager" in (c.name or "").lower()
+        or "nginxproxymanager" in (c.image or "").lower()
+    ]
+    if len(by_name) == 1:
+        return by_name[0]
+    with_data = [c for c in candidates if (c.data_path or "").strip()]
+    if len(with_data) == 1:
+        return with_data[0]
     return None
 
 
@@ -35,12 +46,13 @@ def mount_hint_from_candidates(candidates: list[NpmCandidate]) -> str:
         if (c.data_path or "").strip():
             host = c.data_path.strip()
             return (
-                f"NPM on this host uses {host!r} for /data. "
-                f"Add to ToolBox: -v {host}:/npm-data (and the matching letsencrypt mount if you use certs)."
+                f"NPM /data is at {host!r} on the Docker host. "
+                "ToolBox should export it via docker.sock (linked container). "
+                f"Optional faster path: -v {host}:/npm-data"
             )
     return (
-        "Ensure ToolBox has -v /var/run/docker.sock:/var/run/docker.sock:ro "
-        "and can see the NPM container on this host."
+        "Ensure ToolBox has -v /var/run/docker.sock:/var/run/docker.sock:ro, "
+        "open Backup / Restore so NPM is detected, then try again."
     )
 
 
@@ -53,6 +65,7 @@ def sync_local_npm_from_detect(db: Session, local: LocalNpmBackup, candidates: l
     if saved and _container_ids_match(saved, pick.container_id):
         return False
     apply_candidate_to_local(local, pick)
+    local.enabled = True
     db.add(local)
     db.commit()
     db.refresh(local)

@@ -8,9 +8,9 @@ def start_container(container_id: str) -> str:
     cid = (container_id or "").strip()
     if not cid:
         return ""
-    import docker
+    from .docker_client import get_docker_client
 
-    container = docker.from_env().containers.get(cid)
+    container = get_docker_client().containers.get(cid)
     container.reload()
     if container.status != "running":
         container.start()
@@ -21,12 +21,10 @@ def restart_container(container_id: str) -> str:
     cid = (container_id or "").strip()
     if not cid:
         return ""
+    from .docker_client import get_docker_client
+
     try:
-        import docker
-    except ImportError as e:
-        raise RuntimeError("Docker SDK is not available in this ToolBox image.") from e
-    try:
-        container = docker.from_env().containers.get(cid)
+        container = get_docker_client().containers.get(cid)
     except Exception as e:
         raise RuntimeError(f"Cannot access Docker container {cid!r}: {e}") from e
     container.reload()
@@ -40,7 +38,7 @@ def stop_container(container_id: str) -> None:
     cid = (container_id or "").strip()
     if not cid:
         return
-    import docker
+    from .docker_client import get_docker_client
 
-    container = docker.from_env().containers.get(cid)
+    container = get_docker_client().containers.get(cid)
     container.stop(timeout=60)

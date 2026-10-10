@@ -9,7 +9,10 @@ from pathlib import Path
 
 from npmtbx.snapshot import NPM_DATA_MARKER
 
-from .docker_discover import NpmCandidate, _mount_dest_map
+from npmtbx.docker_mounts import mount_dest_map
+
+from .docker_client import get_docker_client, ping_docker
+from .docker_discover import NpmCandidate
 from .local_volume_paths import DEFAULT_DATA_PATH, DEFAULT_LETSENCRYPT_PATH
 
 
@@ -90,11 +93,9 @@ def _dir_size_bytes(path: Path) -> int:
 
 
 def container_mount_host_paths(container_id: str) -> dict[str, str]:
-    import docker
-
-    container = docker.from_env().containers.get(container_id.strip())
+    container = get_docker_client().containers.get(container_id.strip())
     attrs = container.attrs or {}
-    return _mount_dest_map(attrs.get("Mounts") or [])
+    return mount_dest_map(attrs.get("Mounts") or [])
 
 
 @dataclass(frozen=True)
@@ -154,8 +155,13 @@ class MountDiagnostic:
             detail = self.docker_status_detail or "unknown error"
             lines.append(f"Docker: {detail}")
             lines.append("Fix ToolBox run: -v /var/run/docker.sock:/var/run/docker.sock:ro")
-        elif not self.npm_data_host:
+        elif not self.npm_container_id:
             lines.append("Link NPM container (auto-detect on this page) so ToolBox knows which container to use.")
+        elif not self.npm_data_host:
+            lines.append(
+                "NPM /data mount path not listed in inspect (named volume only) — "
+                "backup/restore still use Docker against the linked container."
+            )
         if self.ready_for_disk_backup:
             lines.append("Direct disk backup: /npm-data bind matches NPM (fastest).")
         return lines
@@ -181,33 +187,6 @@ class MountDiagnostic:
         raise ValueError("Restore blocked.\n" + "\n".join(self.report_lines()))
 
 
-def _docker_status() -> tuple[bool, str]:
-    sock_path = Path("/var/run/docker.sock")
-    if not sock_path.exists():
-        return False, "/var/run/docker.sock not present (not mounted into ToolBox)"
-    if not sock_path.is_socket():
-        return False, "/var/run/docker.sock exists but is not a socket"
-    last_err = ""
-    for base_url in ("unix:///var/run/docker.sock",):
-        try:
-            import docker
-
-            client = docker.DockerClient(base_url=base_url)
-            client.ping()
-            client.containers.list(limit=1)
-            return True, "connected"
-        except Exception as exc:
-            last_err = str(exc)
-    try:
-        import docker
-
-        docker.from_env().ping()
-        return True, "connected"
-    except Exception as exc:
-        last_err = last_err or str(exc)
-    return False, last_err or "cannot connect to Docker"
-
-
 def diagnose_local_npm_mounts(
     local,
     candidates: list[NpmCandidate] | None = None,
@@ -230,9 +209,7 @@ def diagnose_local_npm_mounts(
 
     if cid:
         try:
-            import docker
-
-            container = docker.from_env().containers.get(cid)
+            container = get_docker_client().containers.get(cid)
             cname = (container.name or "").strip().lstrip("/")
             mounts = container_mount_host_paths(cid)
             npm_data_host = mounts.get("/data", "")
@@ -279,9 +256,10 @@ def diagnose_local_npm_mounts(
     le_norm_t = _norm_host_path(tb_le_host) if tb_le_host else ""
     match_le = bool(le_norm_n and le_norm_t and le_norm_n == le_norm_t) or (not le_norm_n and not le_norm_t)
 
-    sock, sock_detail = _docker_status()
+    sock, sock_detail = ping_docker()
     ready_disk = sqlite and match_data and tb_bytes > 4096
-    ready_docker = sock and bool(cid) and bool(npm_data_host)
+    # Full backup reads /data via get_archive when /npm-data is empty; only need Docker + linked NPM.
+    ready_docker = sock and bool(cid)
 
     return MountDiagnostic(
         npm_container_name=cname,

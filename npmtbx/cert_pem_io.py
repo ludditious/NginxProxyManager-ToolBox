@@ -58,11 +58,9 @@ def pem_from_docker_container(container_id: str, cert_id: int) -> tuple[str, str
     if not cid:
         return None
     try:
-        import docker
-    except ImportError:
-        return None
-    try:
-        container = docker.from_env().containers.get(cid)
+        from .docker_client import get_docker_client
+
+        container = get_docker_client().containers.get(cid)
     except Exception:
         return None
     cert_num = int(cert_id)
