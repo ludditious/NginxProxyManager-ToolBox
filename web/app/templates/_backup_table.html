@@ -1,6 +1,6 @@
 {% if backups %}
 <table class="footer-table">
-  <thead><tr><th>Name</th><th>Local NPM</th><th>Created (UTC)</th><th>Size</th><th></th></tr></thead>
+  <thead><tr><th>Name</th><th>Scope</th><th>Created (UTC)</th><th>Size</th><th></th></tr></thead>
   <tbody>
   {% for b in backups %}
     <tr>
@@ -12,7 +12,7 @@
         <a href="/backups/download/{{ b.id }}">Download</a>
         <form method="post" action="{{ restore_action | default('/backup-restore/restore') }}" class="inline-form" onsubmit="return confirm('Restore this backup to Source? NPM will be stopped briefly if Docker detect is configured.');">
           <input type="hidden" name="backup_id" value="{{ b.id }}">
-          <button type="submit" class="linkish">Restore snapshot</button>
+          <button type="submit" class="linkish">Restore</button>
         </form>
         <form method="post" action="/backups/delete" class="inline-form" onsubmit="return confirm('Delete this backup?');">
           <input type="hidden" name="backup_id" value="{{ b.id }}">

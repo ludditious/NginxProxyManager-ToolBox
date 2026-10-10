@@ -238,7 +238,7 @@ def npm_client_from_local(
         raise ValueError(err or "Local NPM password missing.")
     if not local.api_url.strip():
         raise ValueError(
-            "Local NPM is not configured. Open Backup / Restore and set this host's NPM admin URL."
+            "Local NPM API is not configured. Open Snapshots and set this host's NPM admin URL and login."
         )
     try:
         client = NpmClient(
@@ -259,22 +259,12 @@ def npm_client_from_local(
 
 
 def apply_candidate_to_local(local: LocalNpmBackup, candidate) -> None:
-    from .npm_address import PORT_PRESET_CUSTOM, build_api_url_from_form
+    from .local_volume_paths import resolve_toolbox_data_path, resolve_toolbox_letsencrypt_path
 
     local.docker_container_id = candidate.container_id
     local.docker_image = candidate.image
-    if candidate.data_path:
-        local.data_path = candidate.data_path
-    if candidate.letsencrypt_path:
-        local.letsencrypt_path = candidate.letsencrypt_path
-    if candidate.admin_port and not local.api_url.strip():
-        port = (candidate.admin_port or "").strip()
-        host = "host.docker.internal"
-        if port in ("80", "81", "443"):
-            local.api_url = build_api_url_from_form(host, port, "")
-        elif port.isdigit():
-            local.api_url = build_api_url_from_form(host, PORT_PRESET_CUSTOM, port)
-        local.admin_host = host
+    local.data_path = resolve_toolbox_data_path(candidate.data_path)
+    local.letsencrypt_path = resolve_toolbox_letsencrypt_path(candidate.letsencrypt_path)
 
 
 def apply_candidate_to_master(master: MasterInstance, candidate) -> None:

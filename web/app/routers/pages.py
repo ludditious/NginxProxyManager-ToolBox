@@ -818,12 +818,24 @@ def snapshots_page(
         db, user, is_automated=True, page=auto_page, backup_kind="snapshot"
     )
     snap_sched = user.snapshot_schedule
+    local = user.local_npm
+    npm_host, port_preset, npm_port_custom = parse_api_url(local.api_url if local else "")
+    if local and local.admin_host:
+        npm_host = local.admin_host
     return templates.TemplateResponse(
         request,
         "snapshots.html",
         _ctx(
             request,
             user,
+            local=local,
+            npm_host=npm_host,
+            connect_host=(local.connect_host if local else "") or "",
+            port_preset=port_preset,
+            npm_port_custom=npm_port_custom,
+            identity=(local.identity if local else "") or "",
+            verify_tls=local.verify_tls if local else False,
+            enabled=local.enabled if local else True,
             snapshot_schedule=snap_sched,
             manual_backups=manual,
             manual_page=mp,
@@ -862,9 +874,80 @@ def snapshots_schedule_save(
     return RedirectResponse("/snapshots?msg=Snapshot%20schedule%20saved", status_code=303)
 
 
+@router.post("/snapshots/local/save")
+def snapshots_local_save(
+    user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+    npm_host: str = Form(""),
+    connect_host: str = Form(""),
+    port_preset: str = Form("81"),
+    npm_port_custom: str = Form(""),
+    identity: str = Form(""),
+    npm_password: str = Form(""),
+    verify_tls: str | None = Form(None),
+    enabled: str | None = Form(None),
+):
+    ensure_user_defaults(db, user)
+    local = user.local_npm
+    assert local is not None
+    try:
+        local.admin_host = npm_host.strip()
+        local.connect_host = connect_host.strip()
+        local.api_url = build_api_url_from_form(
+            npm_host, port_preset, npm_port_custom, connect_host=connect_host
+        )
+    except ValueError as e:
+        return RedirectResponse(f"/snapshots?err={quote(str(e))}", status_code=303)
+    local.identity = identity.strip()
+    enc, _ = store_secret(npm_password, local.password_enc)
+    local.password_enc = enc
+    local.verify_tls = verify_tls == "on"
+    local.enabled = enabled != "off"
+    db.commit()
+    return RedirectResponse("/snapshots?msg=NPM%20API%20settings%20saved", status_code=303)
+
+
+@router.post("/snapshots/local/test")
+def snapshots_local_test(
+    user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+    npm_host: str = Form(""),
+    connect_host: str = Form(""),
+    port_preset: str = Form("81"),
+    npm_port_custom: str = Form(""),
+    identity: str = Form(""),
+    npm_password: str = Form(""),
+    verify_tls: str | None = Form(None),
+):
+    ensure_user_defaults(db, user)
+    local = user.local_npm
+    password_enc = local.password_enc if local else ""
+    try:
+        api_url = build_api_url_from_form(
+            npm_host, port_preset, npm_port_custom, connect_host=connect_host
+        )
+    except ValueError as e:
+        return RedirectResponse(f"/snapshots?err={quote(str(e))}", status_code=303)
+    admin_host: str | None = npm_host.strip() or None
+    res = test_npm_connection(
+        api_url=api_url,
+        identity=identity,
+        password_enc=password_enc,
+        form_secret=npm_password or None,
+        verify_tls=verify_tls == "on",
+        dns_servers=npm_dns_servers_for_user(user),
+        host_overrides=npm_host_overrides_for_user(user),
+        admin_host=admin_host,
+    )
+    key = "msg" if res.ok else "err"
+    return RedirectResponse(f"/snapshots?{key}={quote(res.message)}", status_code=303)
+
+
 @router.post("/snapshots/create")
 def snapshots_create(user: User = Depends(get_current_user), db: Session = Depends(get_db)):
-    run_user_backup(db, user, trigger="manual", backup_kind="snapshot")
+    log = run_user_backup(db, user, trigger="manual", backup_kind="snapshot")
+    if log.exit_code != 0:
+        return RedirectResponse(f"/snapshots?err={quote(log.body or 'Snapshot failed')}", status_code=303)
     return RedirectResponse("/snapshots?msg=Snapshot%20created", status_code=303)
 
 
@@ -925,9 +1008,6 @@ def backup_restore_page(
     local = user.local_npm
     candidates, discover_err = discover_npm_containers()
     auto = single_high_confidence(candidates)
-    npm_host, port_preset, npm_port_custom = parse_api_url(local.api_url if local else "")
-    if local and local.admin_host:
-        npm_host = local.admin_host
     npm_settings = user.npm_backup_settings
     return templates.TemplateResponse(
         request,
@@ -936,10 +1016,6 @@ def backup_restore_page(
             request,
             user,
             local=local,
-            npm_host=npm_host,
-            connect_host=(local.connect_host if local else "") or "",
-            port_preset=port_preset,
-            npm_port_custom=npm_port_custom,
             candidates=candidates,
             discover_err=discover_err,
             auto_candidate=auto,
@@ -988,90 +1064,38 @@ def backup_restore_schedule_save(
 def backup_restore_local_save(
     user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
-    npm_host: str = Form(""),
-    connect_host: str = Form(""),
-    port_preset: str = Form("81"),
-    npm_port_custom: str = Form(""),
-    identity: str = Form(""),
-    npm_password: str = Form(""),
     data_path: str = Form(""),
     letsencrypt_path: str = Form(""),
-    verify_tls: str | None = Form(None),
-    enabled: str | None = Form(None),
     use_detected: str | None = Form(None),
     candidate_id: str = Form(""),
 ):
     ensure_user_defaults(db, user)
     local = user.local_npm
     assert local is not None
-    if use_detected == "on":
+    if use_detected == "on" and candidate_id.strip():
         candidates, _ = discover_npm_containers()
+        want = candidate_id.strip()
         for c in candidates:
-            if c.container_id == candidate_id.strip():
+            cid = c.container_id
+            if cid == want or cid.startswith(want) or want.startswith(cid[:12]):
                 apply_candidate_to_local(local, c)
                 break
-    try:
-        local.admin_host = npm_host.strip()
-        local.connect_host = connect_host.strip()
-        local.api_url = build_api_url_from_form(
-            npm_host, port_preset, npm_port_custom, connect_host=connect_host
-        )
-    except ValueError as e:
-        return RedirectResponse(f"/backup-restore?err={quote(str(e))}", status_code=303)
-    local.identity = identity.strip()
-    enc, _ = store_secret(npm_password, local.password_enc)
-    local.password_enc = enc
     local.data_path = data_path.strip()
     local.letsencrypt_path = letsencrypt_path.strip()
-    local.verify_tls = verify_tls == "on"
-    local.enabled = enabled != "off"
+    local.enabled = True
     db.commit()
     return RedirectResponse("/backup-restore?msg=Local%20NPM%20saved", status_code=303)
 
 
-@router.post("/backup-restore/local/test")
-def backup_restore_local_test(
-    user: User = Depends(get_current_user),
-    db: Session = Depends(get_db),
-    npm_host: str = Form(""),
-    connect_host: str = Form(""),
-    port_preset: str = Form("81"),
-    npm_port_custom: str = Form(""),
-    identity: str = Form(""),
-    npm_password: str = Form(""),
-    verify_tls: str | None = Form(None),
-):
-    ensure_user_defaults(db, user)
-    local = user.local_npm
-    password_enc = local.password_enc if local else ""
-    try:
-        api_url = build_api_url_from_form(
-            npm_host, port_preset, npm_port_custom, connect_host=connect_host
-        )
-    except ValueError as e:
-        return RedirectResponse(f"/backup-restore?err={quote(str(e))}", status_code=303)
-    admin_host: str | None = npm_host.strip() or None
-    res = test_npm_connection(
-        api_url=api_url,
-        identity=identity,
-        password_enc=password_enc,
-        form_secret=npm_password or None,
-        verify_tls=verify_tls == "on",
-        dns_servers=npm_dns_servers_for_user(user),
-        host_overrides=npm_host_overrides_for_user(user),
-        admin_host=admin_host,
-    )
-    key = "msg" if res.ok else "err"
-    return RedirectResponse(f"/backup-restore?{key}={quote(res.message)}", status_code=303)
-
-
 @router.post("/backup-restore/create")
 def backup_restore_create(user: User = Depends(get_current_user), db: Session = Depends(get_db)):
-    try:
-        run_user_backup(db, user, trigger="manual", backup_kind="full")
-        return RedirectResponse("/backup-restore?msg=Full%20backup%20created", status_code=303)
-    except ValueError as e:
-        return RedirectResponse(f"/backup-restore?err={quote(str(e))}", status_code=303)
+    log = run_user_backup(db, user, trigger="manual", backup_kind="full")
+    if log.exit_code != 0:
+        return RedirectResponse(
+            f"/backup-restore?err={quote(log.body or 'Full backup failed')}",
+            status_code=303,
+        )
+    return RedirectResponse("/backup-restore?msg=Full%20backup%20created", status_code=303)
 
 
 @router.post("/backup-restore/upload")

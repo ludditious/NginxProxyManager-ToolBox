@@ -7,7 +7,6 @@ import json
 import re
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
-from urllib.parse import urlparse
 
 from sqlalchemy.orm import Session
 
@@ -21,6 +20,7 @@ from npmtbx.sync_engine import apply_export_to_target
 
 from .config import get_settings
 from .docker_control import restart_container, stop_container
+from .local_volume_paths import validate_full_backup_paths
 from .models import LocalNpmBackup, MasterInstance, NpmBackup, SlaveInstance, User, utcnow
 from .npm_bridge import (
     npm_client_from_local,
@@ -34,21 +34,8 @@ from .npm_bridge import (
 def _require_local_npm(user: User) -> LocalNpmBackup:
     local = user.local_npm
     if not local or not local.enabled:
-        raise ValueError("Local NPM backup is disabled or not configured.")
+        raise ValueError("Local NPM backup is not configured.")
     return local
-
-
-def _host_label(url: str) -> str:
-    u = (url or "").strip()
-    if not u.startswith("http"):
-        u = "http://" + u
-    host = urlparse(u).hostname or "npm"
-    return re.sub(r"[^\w.-]+", "-", host).strip("-") or "npm"
-
-
-def backup_display_name(api_url: str, when: datetime | None = None) -> str:
-    when = when or datetime.now(timezone.utc)
-    return f"{_host_label(api_url)}-{when.strftime('%Y-%m-%d-%H%M%S')}"
 
 
 def backup_zip_path(name: str) -> Path:
@@ -68,21 +55,33 @@ def create_npm_backup(
     backup_kind: str = "snapshot",
 ) -> NpmBackup:
     local = _require_local_npm(user)
-    dns = npm_dns_servers_for_user(user)
-    overrides = npm_host_overrides_for_user(user)
-    client = npm_client_from_local(local, dns_servers=dns, host_overrides=overrides)
+    when = datetime.now(timezone.utc)
+    stamp = when.strftime("%Y-%m-%d-%H%M%S")
+    container_label = (local.docker_container_id or "npm")[:12]
+
     if backup_kind == "full":
-        include_api = True
+        validate_full_backup_paths(local.data_path, local.letsencrypt_path)
+        include_api = False
         include_volumes = True
-    api_export = client.export_configuration() if include_api else {}
-    prefix = "full" if backup_kind == "full" else "snap"
-    label_url = local.api_url or "local-docker"
-    name = f"{prefix}-local-{backup_display_name(label_url)}"
+        api_export: dict = {}
+        api_base = f"this-docker-host:{container_label}"
+        name = f"full-local-{stamp}"
+        display_url = f"This server ({local.docker_image or 'NPM'})"
+    else:
+        dns = npm_dns_servers_for_user(user)
+        overrides = npm_host_overrides_for_user(user)
+        client = npm_client_from_local(local, dns_servers=dns, host_overrides=overrides)
+        api_export = client.export_configuration() if include_api else {}
+        include_volumes = False
+        api_base = client.base_url
+        name = f"snap-local-{stamp}"
+        display_url = f"local API ({client.base_url})"
+
     zip_path = backup_zip_path(name)
     manifest = create_snapshot_zip(
         dest_zip=zip_path,
-        source_label=f"local-docker:{name}",
-        api_base_url=client.base_url,
+        source_label=f"local-docker-host:{name}",
+        api_base_url=api_base,
         api_export=api_export,
         data_path=local.data_path,
         letsencrypt_path=local.letsencrypt_path,
@@ -91,11 +90,22 @@ def create_npm_backup(
         include_volumes=include_volumes,
         include_docker_inspect=backup_kind == "full",
     )
+
+    if backup_kind == "full":
+        volumes = manifest.get("volume_files") or {}
+        if not volumes.get("data"):
+            if zip_path.is_file():
+                zip_path.unlink()
+            raise ValueError(
+                "Backup failed: no NPM /data files were archived. "
+                f"Check path {local.data_path!r} is mounted and readable in this ToolBox container."
+            )
+
     row = NpmBackup(
         user_id=user.id,
         name=name,
         snapshot_id=str(manifest.get("snapshot_id") or ""),
-        api_url=f"local ({client.base_url})",
+        api_url=display_url,
         file_name=zip_path.name,
         manifest_json=json.dumps(manifest, ensure_ascii=False),
         is_automated=is_automated,
@@ -131,6 +141,8 @@ def _npm_client_for_restore(
     overrides = npm_host_overrides_for_user(user)
     if isinstance(inst, SlaveInstance):
         return npm_client_from_slave(inst, dns_servers=dns, host_overrides=overrides)
+    if isinstance(inst, LocalNpmBackup):
+        return npm_client_from_local(inst, dns_servers=dns, host_overrides=overrides)
     return npm_client_from_master(inst, dns_servers=dns, host_overrides=overrides)
 
 
@@ -161,11 +173,9 @@ def restore_npm_snapshot(
         data_path = (inst.data_path or "").strip()
         le_path = (inst.letsencrypt_path or "").strip()
         if has_data and not data_path:
-            raise ValueError("Snapshot includes /data but local data path is not configured on Backup / Restore.")
+            raise ValueError("Backup includes /data but local data path is not configured.")
         if has_le and not le_path:
-            raise ValueError(
-                "Snapshot includes certificates volume but local certificates path is not configured."
-            )
+            raise ValueError("Backup includes certificates but local certificates path is not configured.")
         container_id = (inst.docker_container_id or "").strip()
         if container_id:
             try:
@@ -175,7 +185,7 @@ def restore_npm_snapshot(
                 lines.append(f"Warning: could not stop container before restore ({e})")
         if has_data and data_path:
             extract_volume_member(zip_path, "volumes/data.tar.gz", Path(data_path), clear_dest=True)
-            lines.append(f"Restored /data to {data_path}")
+            lines.append(f"Restored NPM /data to {data_path}")
         if has_le and le_path:
             extract_volume_member(zip_path, "volumes/letsencrypt.tar.gz", Path(le_path), clear_dest=True)
             lines.append(f"Restored /etc/letsencrypt to {le_path}")
@@ -184,16 +194,16 @@ def restore_npm_snapshot(
                 lines.append(restart_container(container_id))
             except Exception as e:
                 lines.append(f"Warning: volumes restored but container restart failed ({e})")
-        lines.insert(0, "Full snapshot restore (on-disk NPM state)")
+        lines.insert(0, "Restored NPM on this server from backup")
         return lines
+
+    if row.backup_kind == "full":
+        raise ValueError("This full backup has no volume data to restore.")
 
     export = load_api_export_from_zip(zip_path)
     api_keys = [k for k in export if k != "api_base_url" and not (isinstance(export.get(k), dict) and "_error" in export[k])]
     if not api_keys:
-        raise ValueError(
-            "Snapshot has no volume archives and no API export. "
-            "Configure data and certificate paths on Backup / Restore and create a new snapshot with volume archives enabled."
-        )
+        raise ValueError("Backup has no volume archives and no API export.")
     if isinstance(inst, LocalNpmBackup):
         client = npm_client_from_local(
             inst,
@@ -210,7 +220,7 @@ def restore_npm_snapshot(
         source_docker_container_id=(inst.docker_container_id or "").strip(),
         source_client=None,
     )
-    lines.append("Configuration restore from snapshot API export (no volume archives in file)")
+    lines.append("Configuration restore from snapshot API export")
     lines.extend(apply_lines)
     return lines
 

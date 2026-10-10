@@ -9,9 +9,8 @@ from typing import Any
 from npmtbx.client import NpmClient
 
 DOCKER_DISCOVER_HELP = (
-    "Auto-detect needs the Docker socket mounted into this container "
-    "(for example /var/run/docker.sock read-only). If you did not add that, ignore this message: "
-    "fill in the NPM admin address and login below. That is enough for a configuration backup."
+    "Docker detect needs /var/run/docker.sock mounted into this ToolBox container (read-only is fine). "
+    "Then pick a detected NPM container and Save."
 )
 
 
@@ -135,7 +134,7 @@ def discover_npm_containers(*, probe_api: bool = True) -> tuple[list[NpmCandidat
 
             candidates.append(
                 NpmCandidate(
-                    container_id=c.id[:12],
+                    container_id=c.id,
                     name=name,
                     image=image,
                     confidence=confidence,
