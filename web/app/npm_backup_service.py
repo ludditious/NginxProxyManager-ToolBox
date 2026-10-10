@@ -20,7 +20,7 @@ from npmtbx.sync_engine import apply_export_to_target
 
 from .config import get_settings
 from .docker_control import restart_container, stop_container
-from .local_volume_paths import validate_full_backup_paths
+from .local_volume_paths import apply_mount_defaults, validate_full_backup_paths
 from .models import LocalNpmBackup, MasterInstance, NpmBackup, SlaveInstance, User, utcnow
 from .npm_bridge import (
     npm_client_from_local,
@@ -60,6 +60,10 @@ def create_npm_backup(
     container_label = (local.docker_container_id or "npm")[:12]
 
     if backup_kind == "full":
+        if apply_mount_defaults(local):
+            db.add(local)
+            db.commit()
+            db.refresh(local)
         validate_full_backup_paths(local.data_path, local.letsencrypt_path)
         include_api = False
         include_volumes = True

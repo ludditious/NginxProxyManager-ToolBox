@@ -27,12 +27,29 @@ def resolve_toolbox_letsencrypt_path(docker_host_path: str = "") -> str:
     return DEFAULT_LETSENCRYPT_PATH
 
 
+def apply_mount_defaults(local) -> bool:
+    """Fill empty local NPM paths when standard ToolBox bind mounts exist."""
+    changed = False
+    if not (local.data_path or "").strip():
+        p = resolve_toolbox_data_path()
+        if Path(p).is_dir():
+            local.data_path = p
+            changed = True
+    if not (local.letsencrypt_path or "").strip():
+        p = resolve_toolbox_letsencrypt_path()
+        if Path(p).is_dir():
+            local.letsencrypt_path = p
+            changed = True
+    return changed
+
+
 def validate_full_backup_paths(data_path: str, letsencrypt_path: str) -> None:
     dp = (data_path or "").strip()
     if not dp:
         raise ValueError(
-            "Set the NPM data folder path (inside this ToolBox container), then Save. "
-            "Example: /npm-data — bind-mount the same host folder you use for NPM /data."
+            "ToolBox cannot see NPM's data folder. On the Backup / Restore page, set the data path "
+            "(usually /npm-data) and click Save—or add a bind mount to the ToolBox container, e.g. "
+            "-v /your/npm/data:/npm-data"
         )
     data = Path(dp)
     if not data.is_dir():

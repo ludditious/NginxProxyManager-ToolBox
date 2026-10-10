@@ -143,6 +143,11 @@ def ensure_user_defaults(db: Session, user: User) -> None:
         db.add(local)
         db.flush()
         _seed_local_npm_from_master(user, local)
+    if user.local_npm:
+        from .local_volume_paths import apply_mount_defaults
+
+        if apply_mount_defaults(user.local_npm):
+            db.add(user.local_npm)
     db.commit()
     db.refresh(user)
 

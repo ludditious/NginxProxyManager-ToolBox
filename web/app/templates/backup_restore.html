@@ -1,108 +1,218 @@
-{% extends "base.html" %}
-{% block title %} - Backup / Restore{% endblock %}
-{% block content %}
-<h1>Backup / Restore</h1>
-<p class="muted small">Backs up <strong>NPM on this server</strong> — the <code>/data</code> and certificate folders ToolBox can read, plus Docker container info. Restore puts those folders back and restarts the NPM container. Not related to Sync Source. Schedules use <strong>UTC</strong>.</p>
-<p class="muted small">ToolBox must mount the same host folders as NPM, e.g. <code>-v …/npm/data:/npm-data</code> and <code>-v …/npm/letsencrypt:/npm-letsencrypt</code>, plus <code>-v /var/run/docker.sock:/var/run/docker.sock:ro</code>.</p>
-{% if message %}
-<div class="cmd-copy-block">
-  <textarea readonly class="cmd-box message-box{% if message_class %} {{ message_class }}{% endif %}" id="full-backup-msg" rows="5">{{ message }}</textarea>
-  <button type="button" class="copy-cmd" data-target="full-backup-msg">Copy</button>
-</div>
-{% endif %}
-
-{% if discover_err %}
-<p class="notice notice-warn">{{ discover_err }}</p>
-{% elif candidates %}
-<section class="card panel-wide">
-  <h2 class="footer-heading">NPM container on this server</h2>
-  {% if auto_candidate %}
-  <p class="muted small">Detected: <strong>{{ auto_candidate.name }}</strong> ({{ auto_candidate.image }})</p>
-  {% endif %}
-  <table>
-    <thead><tr><th>Name</th><th>Image</th><th>Notes</th></tr></thead>
-    <tbody>
-    {% for c in candidates %}
-      <tr>
-        <td>{{ c.name }}</td>
-        <td class="small muted">{{ c.image }}</td>
-        <td class="small muted">{{ c.notes }}</td>
-      </tr>
-    {% endfor %}
-    </tbody>
-  </table>
-</section>
-{% endif %}
-
-<section class="card">
-  <h2 class="footer-heading">This server</h2>
-  <form method="post" action="/backup-restore/local/save">
-    {% if auto_candidate %}
-    <label class="check"><input type="checkbox" name="use_detected" value="on" checked> Link detected NPM container ({{ auto_candidate.name }})</label>
-    <input type="hidden" name="candidate_id" value="{{ auto_candidate.container_id }}">
-    {% elif local and local.docker_container_id %}
-    <p class="muted small">Container: <code>{{ local.docker_container_id[:12] }}</code> {% if local.docker_image %}({{ local.docker_image }}){% endif %}</p>
-    {% endif %}
-    <label>NPM data folder <span class="muted">(path inside ToolBox, NPM <code>/data</code>)</span>
-      <input type="text" name="data_path" value="{{ local.data_path if local else '/npm-data' }}" placeholder="/npm-data" required>
-    </label>
-    <label>Certificates folder <span class="muted">(NPM <code>/etc/letsencrypt</code>)</span>
-      <input type="text" name="letsencrypt_path" value="{{ local.letsencrypt_path if local else '/npm-letsencrypt' }}" placeholder="/npm-letsencrypt">
-    </label>
-    <button type="submit">Save</button>
-  </form>
-</section>
-
-<section class="card backup-section">
-  <h2 class="footer-heading">Scheduled full backups</h2>
-  <form method="post" action="/backup-restore/schedule/save">
-    <label class="check"><input type="checkbox" name="enabled" {% if schedule.enabled %}checked{% endif %}> Enable scheduled full backups</label>
-    <label>Interval
-      <select name="interval_minutes">
-        {% for minutes, label in interval_choices %}
-        <option value="{{ minutes }}" {% if schedule.interval_minutes == minutes %}selected{% endif %}>{{ label }}</option>
-        {% endfor %}
-      </select>
-    </label>
-    <label>Retention
-      <select name="retention_days">
-        {% for form_val, days, label in backup_retention_options %}
-        <option value="{{ form_val }}" {% if retention_days == days %}selected{% endif %}>{{ label }}</option>
-        {% endfor %}
-      </select>
-    </label>
-    <fieldset>
-      <legend>Days (UTC)</legend>
-      <div class="day-grid">
-      {% for d in day_keys %}
-        <label class="check"><input type="checkbox" name="days" value="{{ d }}" {% if d in schedule.get_days() %}checked{% endif %}> {{ d|upper }}</label>
-      {% endfor %}
-      </div>
-    </fieldset>
-    <button type="submit">Save backup schedule</button>
-  </form>
-</section>
-
-<section class="footer-backups card backup-section">
-  <h2 class="footer-heading">Manual full backups</h2>
-  <form method="post" action="/backup-restore/create" class="footer-actions">
-    <button type="submit" class="primary">Back up NPM on this server now</button>
-  </form>
-  {% with backups=manual_backups, page=manual_page, pages=manual_pages, total=manual_total, page_param='manual_page', other_page_param='auto_page', other_page=auto_page, restore_action='/backup-restore/restore' %}
-  {% include "_backup_table.html" %}
-  {% endwith %}
-  <h3 class="footer-heading">Automated full backups</h3>
-  {% with backups=auto_backups, page=auto_page, pages=auto_pages, total=auto_total, page_param='auto_page', other_page_param='manual_page', other_page=manual_page, restore_action='/backup-restore/restore' %}
-  {% include "_backup_table.html" %}
-  {% endwith %}
-</section>
-
-<section class="card backup-section">
-  <h2 class="footer-heading">Upload &amp; restore</h2>
-  <form method="post" action="/backup-restore/upload" enctype="multipart/form-data">
-    <label>Full backup ZIP<input type="file" name="backup_file" accept=".zip,application/zip" required></label>
-    <label class="check"><input type="checkbox" name="restore_after" value="on"> After upload, restore to this server</label>
-    <button type="submit">Upload</button>
-  </form>
-</section>
-{% endblock %}
+{% extends "base.html" %}
+
+{% block title %} - Backup / Restore{% endblock %}
+
+{% block content %}
+
+<h1>Backup / Restore</h1>
+
+<p class="muted small">Backs up <strong>NPM on this server</strong> — the <code>/data</code> and certificate folders ToolBox can read, plus Docker container info. Restore puts those folders back and restarts the NPM container. Not related to Sync Source. Schedules use <strong>UTC</strong>.</p>
+
+<p class="muted small">ToolBox must mount the same host folders as NPM, e.g. <code>-v …/npm/data:/npm-data</code> and <code>-v …/npm/letsencrypt:/npm-letsencrypt</code>, plus <code>-v /var/run/docker.sock:/var/run/docker.sock:ro</code>.</p>
+
+{% if message %}
+
+<div class="cmd-copy-block">
+
+  <textarea readonly class="cmd-box message-box{% if message_class %} {{ message_class }}{% endif %}" id="full-backup-msg" rows="5">{{ message }}</textarea>
+
+  <button type="button" class="copy-cmd" data-target="full-backup-msg">Copy</button>
+
+</div>
+
+{% endif %}
+
+
+
+{% if discover_err %}
+
+<p class="notice notice-warn">{{ discover_err }}</p>
+
+{% elif candidates %}
+
+<section class="card panel-wide">
+
+  <h2 class="footer-heading">NPM container on this server</h2>
+
+  {% if auto_candidate %}
+
+  <p class="muted small">Detected: <strong>{{ auto_candidate.name }}</strong> ({{ auto_candidate.image }})</p>
+
+  {% endif %}
+
+  <table>
+
+    <thead><tr><th>Name</th><th>Image</th><th>Notes</th></tr></thead>
+
+    <tbody>
+
+    {% for c in candidates %}
+
+      <tr>
+
+        <td>{{ c.name }}</td>
+
+        <td class="small muted">{{ c.image }}</td>
+
+        <td class="small muted">{{ c.notes }}</td>
+
+      </tr>
+
+    {% endfor %}
+
+    </tbody>
+
+  </table>
+
+</section>
+
+{% endif %}
+
+
+
+<section class="card">
+
+  <h2 class="footer-heading">This server</h2>
+
+  <form method="post" action="/backup-restore/local/save">
+
+    {% if auto_candidate %}
+
+    <label class="check"><input type="checkbox" name="use_detected" value="on" checked> Link detected NPM container ({{ auto_candidate.name }})</label>
+
+    <input type="hidden" name="candidate_id" value="{{ auto_candidate.container_id }}">
+
+    {% elif local and local.docker_container_id %}
+
+    <p class="muted small">Container: <code>{{ local.docker_container_id[:12] }}</code> {% if local.docker_image %}({{ local.docker_image }}){% endif %}</p>
+
+    {% endif %}
+
+    <label>NPM data folder <span class="muted">(path inside ToolBox, NPM <code>/data</code>)</span>
+
+      <input type="text" name="data_path" value="{{ local.data_path if local and local.data_path else '' }}" placeholder="/npm-data" required>
+
+    </label>
+
+    <label>Certificates folder <span class="muted">(NPM <code>/etc/letsencrypt</code>)</span>
+
+      <input type="text" name="letsencrypt_path" value="{{ local.letsencrypt_path if local and local.letsencrypt_path else '' }}" placeholder="/npm-letsencrypt">
+
+    </label>
+
+    <p class="muted small">Click <strong>Save</strong> after changing paths. With the usual <code>/npm-data</code> bind mounts, manual backup can detect them without Save.</p>
+
+    <button type="submit">Save</button>
+
+  </form>
+
+</section>
+
+
+
+<section class="card backup-section">
+
+  <h2 class="footer-heading">Scheduled full backups</h2>
+
+  <form method="post" action="/backup-restore/schedule/save">
+
+    <label class="check"><input type="checkbox" name="enabled" {% if schedule.enabled %}checked{% endif %}> Enable scheduled full backups</label>
+
+    <label>Interval
+
+      <select name="interval_minutes">
+
+        {% for minutes, label in interval_choices %}
+
+        <option value="{{ minutes }}" {% if schedule.interval_minutes == minutes %}selected{% endif %}>{{ label }}</option>
+
+        {% endfor %}
+
+      </select>
+
+    </label>
+
+    <label>Retention
+
+      <select name="retention_days">
+
+        {% for form_val, days, label in backup_retention_options %}
+
+        <option value="{{ form_val }}" {% if retention_days == days %}selected{% endif %}>{{ label }}</option>
+
+        {% endfor %}
+
+      </select>
+
+    </label>
+
+    <fieldset>
+
+      <legend>Days (UTC)</legend>
+
+      <div class="day-grid">
+
+      {% for d in day_keys %}
+
+        <label class="check"><input type="checkbox" name="days" value="{{ d }}" {% if d in schedule.get_days() %}checked{% endif %}> {{ d|upper }}</label>
+
+      {% endfor %}
+
+      </div>
+
+    </fieldset>
+
+    <button type="submit">Save backup schedule</button>
+
+  </form>
+
+</section>
+
+
+
+<section class="footer-backups card backup-section">
+
+  <h2 class="footer-heading">Manual full backups</h2>
+
+  <form method="post" action="/backup-restore/create" class="footer-actions">
+
+    <button type="submit" class="primary">Back up NPM on this server now</button>
+
+  </form>
+
+  {% with backups=manual_backups, page=manual_page, pages=manual_pages, total=manual_total, page_param='manual_page', other_page_param='auto_page', other_page=auto_page, restore_action='/backup-restore/restore' %}
+
+  {% include "_backup_table.html" %}
+
+  {% endwith %}
+
+  <h3 class="footer-heading">Automated full backups</h3>
+
+  {% with backups=auto_backups, page=auto_page, pages=auto_pages, total=auto_total, page_param='auto_page', other_page_param='manual_page', other_page=manual_page, restore_action='/backup-restore/restore' %}
+
+  {% include "_backup_table.html" %}
+
+  {% endwith %}
+
+</section>
+
+
+
+<section class="card backup-section">
+
+  <h2 class="footer-heading">Upload &amp; restore</h2>
+
+  <form method="post" action="/backup-restore/upload" enctype="multipart/form-data">
+
+    <label>Full backup ZIP<input type="file" name="backup_file" accept=".zip,application/zip" required></label>
+
+    <label class="check"><input type="checkbox" name="restore_after" value="on"> After upload, restore to this server</label>
+
+    <button type="submit">Upload</button>
+
+  </form>
+
+</section>
+
+{% endblock %}
+
