@@ -34,6 +34,7 @@ from ..npm_backup_service import (
     delete_npm_backup,
     restore_npm_snapshot,
 )
+from ..restore_guard import require_restore_confirmation
 from ..ui_context import ROLE_BACKUP_ENDPOINT, template_nav_extras
 from ..npm_address import build_api_url_from_form, parse_api_url, validate_host
 from npmtbx.dns_resolve import (
@@ -409,15 +410,17 @@ def slave_restore(
     db: Session = Depends(get_db),
     slave_id: int = Form(...),
     backup_id: int = Form(...),
+    confirm_phrase: str = Form(""),
 ):
     slave = db.get(SlaveInstance, slave_id)
     if not slave or slave.user_id != user.id:
         return RedirectResponse("/synchronize?err=Target%20not%20found", status_code=303)
     try:
+        require_restore_confirmation(confirm_phrase)
         lines = restore_npm_snapshot(db, user, backup_id, target=slave)
         msg = "; ".join(lines)
         return RedirectResponse(f"/synchronize?msg={quote(msg)}", status_code=303)
-    except ValueError as e:
+    except Exception as e:
         return RedirectResponse(f"/synchronize?err={quote(str(e))}", status_code=303)
 
 
@@ -978,8 +981,10 @@ def snapshots_restore(
     user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
     backup_id: int = Form(...),
+    confirm_phrase: str = Form(""),
 ):
     try:
+        require_restore_confirmation(confirm_phrase)
         lines = restore_npm_snapshot(db, user, backup_id)
         return RedirectResponse(f"/snapshots?msg={quote('; '.join(lines))}", status_code=303)
     except Exception as e:
@@ -1104,6 +1109,7 @@ async def backup_restore_upload(
     db: Session = Depends(get_db),
     backup_file: UploadFile = File(...),
     restore_after: str | None = Form(None),
+    confirm_phrase: str = Form(""),
 ):
     from ..services import ingest_snapshot_file
 
@@ -1121,6 +1127,7 @@ async def backup_restore_upload(
     msg = f"Uploaded {row.name}"
     if restore_after == "on":
         try:
+            require_restore_confirmation(confirm_phrase)
             lines = restore_npm_snapshot(db, user, row.id)
             msg = f"{msg}; {'; '.join(lines)}"
         except Exception as e:
@@ -1133,8 +1140,10 @@ def backup_restore_restore(
     user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
     backup_id: int = Form(...),
+    confirm_phrase: str = Form(""),
 ):
     try:
+        require_restore_confirmation(confirm_phrase)
         lines = restore_npm_snapshot(db, user, backup_id)
         return RedirectResponse(f"/backup-restore?msg={quote('; '.join(lines))}", status_code=303)
     except Exception as e:
@@ -1208,11 +1217,13 @@ def backups_restore_master_legacy(
     user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
     backup_id: int = Form(...),
+    confirm_phrase: str = Form(""),
 ):
     try:
+        require_restore_confirmation(confirm_phrase)
         lines = restore_npm_snapshot(db, user, backup_id)
         return RedirectResponse(f"/backup-restore?msg={quote('; '.join(lines))}", status_code=303)
-    except ValueError as e:
+    except Exception as e:
         return RedirectResponse(f"/backup-restore?err={quote(str(e))}", status_code=303)
 
 

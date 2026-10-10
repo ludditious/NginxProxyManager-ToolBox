@@ -10,6 +10,12 @@ from pathlib import Path
 
 from sqlalchemy.orm import Session
 
+from npmtbx.restore_validation import (
+    DATA_MEMBER,
+    LE_MEMBER,
+    approve_api_configuration_restore,
+    approve_destructive_volume_restore,
+)
 from npmtbx.snapshot import (
     create_snapshot_zip,
     extract_volume_member,
@@ -207,16 +213,13 @@ def restore_npm_snapshot(
             raise ValueError("Backup includes /data but local data path is not configured.")
         if has_le and not le_path:
             raise ValueError("Backup includes certificates but local certificates path is not configured.")
-        if has_data:
-            from npmtbx.snapshot import validate_volume_member_for_restore
 
-            validate_volume_member_for_restore(
-                zip_path, "volumes/data.tar.gz", require_npm_data=True
-            )
-        if row.size_bytes > 0 and row.size_bytes < 4096:
-            raise ValueError(
-                f"This backup file is only {row.size_bytes} bytes — too small to restore safely."
-            )
+        approval = approve_destructive_volume_restore(
+            zip_path,
+            restore_data=has_data,
+            restore_letsencrypt=has_le,
+            record_size_bytes=row.size_bytes or 0,
+        )
 
         container_id = (inst.docker_container_id or "").strip()
         stopped = False
@@ -231,19 +234,19 @@ def restore_npm_snapshot(
             if has_data and data_path:
                 extract_volume_member(
                     zip_path,
-                    "volumes/data.tar.gz",
+                    DATA_MEMBER,
                     Path(data_path),
                     clear_dest=True,
-                    require_npm_data=True,
+                    approval=approval,
                 )
                 lines.append(f"Restored NPM /data to {data_path}")
             if has_le and le_path:
                 extract_volume_member(
                     zip_path,
-                    "volumes/letsencrypt.tar.gz",
+                    LE_MEMBER,
                     Path(le_path),
                     clear_dest=True,
-                    require_npm_data=False,
+                    approval=approval,
                 )
                 lines.append(f"Restored /etc/letsencrypt to {le_path}")
         except Exception:
@@ -270,6 +273,7 @@ def restore_npm_snapshot(
     if row.backup_kind == "full":
         raise ValueError("This full backup has no volume data to restore.")
 
+    approve_api_configuration_restore(zip_path)
     export = load_api_export_from_zip(zip_path)
     api_keys = [k for k in export if k != "api_base_url" and not (isinstance(export.get(k), dict) and "_error" in export[k])]
     if not api_keys:

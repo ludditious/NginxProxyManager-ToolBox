@@ -10,8 +10,11 @@
       <td>{{ b.size_bytes }}</td>
       <td class="backup-actions">
         <a href="/backups/download/{{ b.id }}">Download</a>
-        <form method="post" action="{{ restore_action | default('/backup-restore/restore') }}" class="inline-form" onsubmit="return confirm('Replace live NPM data on this server with this backup? NPM will stop briefly. Only continue if this ZIP is a known-good full backup.');">
+        <form method="post" action="{{ restore_action | default('/backup-restore/restore') }}" class="inline-form restore-form">
           <input type="hidden" name="backup_id" value="{{ b.id }}">
+          <label class="restore-confirm-label">Type RESTORE
+            <input type="text" name="confirm_phrase" autocomplete="off" required placeholder="RESTORE">
+          </label>
           <button type="submit" class="linkish">Restore</button>
         </form>
         <form method="post" action="/backups/delete" class="inline-form" onsubmit="return confirm('Delete this backup?');">

@@ -289,10 +289,18 @@ def extract_volume_member(
     *,
     clear_dest: bool = False,
     require_npm_data: bool = False,
+    approval: object | None = None,
 ) -> None:
-    validate_volume_member_for_restore(
-        zip_path, member, require_npm_data=require_npm_data
-    )
+    if clear_dest:
+        if approval is None:
+            raise ValueError(
+                "Refusing to replace live NPM folders: backup was not validated for restore."
+            )
+        approval.assert_can_replace(zip_path, member)  # type: ignore[union-attr]
+    elif require_npm_data:
+        validate_volume_member_for_restore(
+            zip_path, member, require_npm_data=True
+        )
     dest_dir.mkdir(parents=True, exist_ok=True)
     with tempfile.TemporaryDirectory(prefix="npmtbx-restore-") as tmp:
         tmp_path = Path(tmp)
